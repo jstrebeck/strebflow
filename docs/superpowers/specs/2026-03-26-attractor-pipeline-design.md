@@ -163,26 +163,31 @@ class Workspace:
 
 Run IDs are timestamp-based: `run_YYYYMMDD_HHMMSS` (auto-generated if not provided). Each run is fully isolated.
 
-## 5. OpenRouter Client
+## 5. LLM Client
 
-Single `OpenRouterClient` class, async with `httpx.AsyncClient`:
+Single `LLMClient` class, async with `httpx.AsyncClient`. Supports multiple OpenAI-compatible providers (OpenRouter, vast.ai, or any other compatible endpoint).
 
 ```python
-class OpenRouterClient:
-    def __init__(self, api_key: str, default_model: str = "anthropic/claude-sonnet-4-5"):
+class LLMClient:
+    def __init__(self, providers: dict[str, ProviderConfig]):
+        # providers: {"openrouter": {base_url, api_key}, "vastai": {base_url, api_key}, ...}
         ...
 
     async def complete(self, messages, system="", model=None, tools=None) -> dict:
+        # Model string is "provider/model" e.g. "openrouter/anthropic/claude-sonnet-4-5"
+        # Parses provider prefix, routes to correct base_url + api_key
         # Standard OpenAI-compatible chat completions
         ...
 
     async def complete_structured(self, messages, system, response_schema, model=None) -> dict:
-        # Forces JSON response matching schema via response_format
+        # Same provider routing, forces JSON response matching schema via response_format
         ...
 ```
 
-- Model selected per-call, defaults from config per node
-- Rate limiting with exponential backoff (3 retries)
+- Model strings encode `provider/model` — the first path segment selects the provider, the rest is the model ID passed to that provider's API
+- Provider routing: `LLMClient` maintains one `httpx.AsyncClient` per provider, each configured with the provider's base URL and API key
+- Rate limiting with exponential backoff (3 retries), per provider
+- If a provider doesn't support a feature (e.g., `response_format` for structured output), the call fails with a clear error — no silent fallback
 
 ## 6. Node Details
 
@@ -232,14 +237,20 @@ If an LLM call fails after all retries (3 attempts with exponential backoff), th
 Single `pipeline_config.yaml`:
 
 ```yaml
-openrouter:
-  api_key: ${OPENROUTER_API_KEY}
+llm:
+  providers:
+    openrouter:
+      base_url: https://openrouter.ai/api/v1
+      api_key: ${OPENROUTER_API_KEY}
+    vastai:
+      base_url: ${VASTAI_BASE_URL}  # e.g. https://cloud.vast.ai/api/v1
+      api_key: ${VASTAI_API_KEY}
   models:
-    planner: anthropic/claude-sonnet-4-5
-    implementer: anthropic/claude-sonnet-4-5
-    validator: anthropic/claude-sonnet-4-5
-    diagnoser: openai/o3
-    reviewer: anthropic/claude-sonnet-4-5
+    planner: openrouter/anthropic/claude-sonnet-4-5
+    implementer: openrouter/anthropic/claude-sonnet-4-5
+    validator: openrouter/anthropic/claude-sonnet-4-5
+    diagnoser: openrouter/openai/o3
+    reviewer: openrouter/anthropic/claude-sonnet-4-5
 
 pipeline:
   max_cycles: 10
@@ -267,7 +278,7 @@ logging:
 ```
 
 - Loaded via `pyyaml`, validated by Pydantic model at startup
-- Env var substitution for `${...}` patterns handled manually
+- Env var substitution for `${...}` patterns handled manually (used for API keys, base URLs)
 - Immutable after load
 
 ## 8. CLI
@@ -309,14 +320,14 @@ python -m attractor status --run-id my-feature-001
 - Non-root user `attractor`
 - `git` installed for workspace operations
 - Volumes: `/workspace/runs`, `/workspace/specs`, `/workspace/logs`
-- `OPENROUTER_API_KEY` required env var
-- `docker-compose.yml` mounts local dirs, passes API key from host
+- Provider API keys as env vars (e.g., `OPENROUTER_API_KEY`, `VASTAI_API_KEY`, `VASTAI_BASE_URL`) — only keys for configured providers are required
+- `docker-compose.yml` mounts local dirs, passes API keys from host env
 
 ### Kubernetes (manifests only)
 
 - `k8s/job-template.yaml` — parameterized Job
 - `k8s/configmap.yaml` — pipeline config as ConfigMap
-- `k8s/secret-template.yaml` — API key Secret placeholder
+- `k8s/secret-template.yaml` — provider API keys Secret placeholder (one key per configured provider)
 - `k8s/pvc.yaml` — workspace PVC
 - `k8s/rbac.yaml` — minimal placeholder
 - Resource requests: `cpu: 500m, memory: 512Mi`, limits: `cpu: 2, memory: 2Gi`
@@ -351,7 +362,7 @@ attractor-py/
 │       │   ├── shell_tools.py
 │       │   └── search_tools.py
 │       ├── workspace.py
-│       ├── openrouter_client.py
+│       ├── llm_client.py
 │       ├── config.py
 │       └── logging.py
 ├── tests/
@@ -395,3 +406,4 @@ attractor-py/
 4. **Target repo handling:** Copy + `git init` (not clone). Clean per-run diffs regardless of target's git state.
 5. **Context truncation:** Character-based (`chars / 4`), no `tiktoken` dependency. Configurable threshold.
 6. **Implementer architecture:** Internal while-loop with state snapshots (Approach C). Same token efficiency as a plain loop, with observability from disk snapshots. No LangGraph subgraph overhead.
+7. **Multi-provider LLM:** Single `LLMClient` class routes to multiple OpenAI-compatible providers (OpenRouter, vast.ai, etc.) via `provider/model` string convention. Avoids provider-specific SDKs.
