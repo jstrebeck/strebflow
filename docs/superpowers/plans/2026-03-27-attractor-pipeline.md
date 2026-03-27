@@ -321,6 +321,7 @@ class PipelineSettings(BaseModel):
     context_char_limit: int = 400_000
     context_truncation_strategy: str = "middle"
     test_command: str | None = None
+    test_timeout: int = 120
 
 
 class WorkspaceConfig(BaseModel):
@@ -331,6 +332,8 @@ class WorkspaceConfig(BaseModel):
 class LoggingConfig(BaseModel):
     level: str = "INFO"
     structured: bool = True
+    # events: defined for forward compatibility — event filtering not yet implemented.
+    # All events are currently emitted regardless of this list.
     events: list[str] = Field(default_factory=lambda: [
         "CYCLE_START", "TOOL_CALL_START", "TOOL_CALL_END",
         "NODE_ENTER", "NODE_EXIT", "CONVERGENCE", "LOOP_DETECTED",
@@ -396,6 +399,8 @@ pipeline:
   context_truncation_strategy: middle
 
 workspace:
+  # Relative paths for local dev. Docker/K8s configs use absolute paths
+  # (e.g., /workspace/runs, /workspace/target)
   base_path: ./runs
   target_repo: ./target
 
@@ -446,11 +451,32 @@ def setup_logging(level: str = "INFO", structured: bool = True, log_file: Path |
     else:
         processors.append(structlog.dev.ConsoleRenderer())
 
+    # Write to both stdout and optionally a log file
+    outputs = [sys.stdout]
+    if log_file:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        outputs.append(open(log_file, "a"))  # noqa: SIM115
+
+    class MultiFileLoggerFactory:
+        def __init__(self, files):
+            self._files = files
+        def __call__(self, *args, **kwargs):
+            return MultiFileLogger(self._files)
+
+    class MultiFileLogger:
+        def __init__(self, files):
+            self._files = files
+        def msg(self, message: str) -> None:
+            for f in self._files:
+                f.write(message + "\n")
+                f.flush()
+        log = debug = info = warning = error = critical = fatal = msg
+
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.stdlib.BoundLogger,
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
+        logger_factory=MultiFileLoggerFactory(outputs),
         cache_logger_on_first_use=True,
     )
 
@@ -753,6 +779,7 @@ class Workspace:
         self._git("init")
         self._git("add", "-A")
         self._git("commit", "-m", "initial state", "--allow-empty")
+        self._initial_commit = self._git("rev-parse", "HEAD")
 
     def _git(self, *args: str) -> str:
         """Run a git command in the workspace."""
@@ -777,19 +804,23 @@ class Workspace:
         return result.stdout.strip()
 
     def get_diff(self) -> str:
-        """Get the diff of all changes since initial state."""
-        # Diff working tree against HEAD
-        staged = self._git("diff", "--cached")
-        unstaged = self._git("diff")
-        if staged and unstaged:
-            return staged + "\n" + unstaged
-        return staged or unstaged
+        """Get the diff of all changes since initial commit."""
+        return self._git("diff", self._initial_commit)
 
     def commit_checkpoint(self, message: str) -> str:
         """Commit all changes and return the commit hash."""
         self._git("add", "-A")
         self._git("commit", "-m", message, "--allow-empty")
         return self._git("rev-parse", "HEAD")
+
+    @classmethod
+    def reopen(cls, workspace_path: str) -> "Workspace":
+        """Reopen an existing workspace without copying/reinitializing."""
+        ws = cls.__new__(cls)
+        ws.path = workspace_path
+        ws._ws = Path(workspace_path)
+        ws._initial_commit = ws._git("rev-list", "--max-parents=0", "HEAD")
+        return ws
 
     async def run_isolated(self, command: str, timeout: int = 120) -> dict:
         """Run a command in the workspace directory."""
@@ -1044,6 +1075,13 @@ async def test_list_files(workspace_dir):
 
 @pytest.mark.asyncio
 async def test_grep(workspace_dir):
+    import subprocess
+    subprocess.run(["git", "add", "-A"], cwd=workspace_dir, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=workspace_dir, capture_output=True,
+        env={**subprocess.os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"},
+    )
     results = await grep("line2", ".", str(workspace_dir))
     assert any("existing.py" in r and "line2" in r for r in results)
 
@@ -1140,7 +1178,7 @@ async def list_files(path: str, workspace: str) -> list[str]:
         )
         untracked = set(result.stdout.strip().split("\n")) if result.stdout.strip() else set()
 
-        all_files = sorted(tracked | untracked - {""})
+        all_files = sorted((tracked | untracked) - {""})
         if len(all_files) > MAX_LIST_FILES:
             return all_files[:MAX_LIST_FILES] + [
                 f"... and {len(all_files) - MAX_LIST_FILES} more files (capped at {MAX_LIST_FILES})"
@@ -1158,17 +1196,17 @@ async def grep(pattern: str, path: str, workspace: str) -> list[str]:
         return [f"Error: path '{path}' resolves outside the workspace"]
 
     try:
+        # Use git grep to respect .gitignore (falls back to regular grep if not in git repo)
         result = subprocess.run(
-            ["grep", "-rn", "--include=*", pattern, str(target)],
+            ["git", "grep", "-rn", "--no-color", pattern, "--", str(target)],
+            cwd=str(ws),
             capture_output=True,
             text=True,
         )
         if result.returncode == 1:  # no match
             return []
         lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
-        # Make paths relative to workspace
-        ws_str = str(ws) + "/"
-        return [line.replace(ws_str, "") for line in lines]
+        return lines
     except Exception as e:
         return [f"Error searching: {e}"]
 ```
@@ -1755,9 +1793,7 @@ async def test_runner(
     if not test_cmd:
         test_cmd = _detect_test_command(state["workspace_path"])
 
-    ws = Workspace.__new__(Workspace)
-    ws.path = state["workspace_path"]
-
+    ws = Workspace.reopen(state["workspace_path"])
     result = await ws.run_isolated(test_cmd, timeout=test_timeout)
 
     return {
@@ -1959,6 +1995,7 @@ import json
 from typing import Any
 
 from attractor.llm_client import LLMClient
+from attractor.workspace import Workspace
 
 VALIDATOR_SYSTEM = """You are evaluating whether a code implementation satisfies a set of scenarios.
 
@@ -1987,14 +2024,21 @@ VALIDATOR_SCHEMA = {
 
 async def scenario_validator(state: dict[str, Any], llm: LLMClient, model: str) -> dict[str, Any]:
     """Evaluate scenarios against test output and code diff."""
+    # Get the cumulative diff from initial commit (not just last cycle)
+    try:
+        ws = Workspace.reopen(state["workspace_path"])
+        current_diff = ws.get_diff() or "No changes from initial state"
+    except Exception:
+        current_diff = "Unable to compute diff"
+
     user_content = f"""## Scenarios
 {state['scenarios']}
 
 ## Test Output (exit code: {state['test_exit_code']})
 {state['test_output']}
 
-## Code Diff
-{state.get('diff_history', [''])[-1] if state.get('diff_history') else 'No diff available'}"""
+## Code Diff (cumulative from initial state)
+{current_diff}"""
 
     response = await llm.complete_structured(
         messages=[{"role": "user", "content": user_content}],
@@ -2101,16 +2145,75 @@ async def reviewer(state: dict[str, Any], llm: LLMClient, model: str) -> dict[st
     return {"review_report": review}
 ```
 
-- [ ] **Step 5: Run full test suite**
+- [ ] **Step 5: Write mocked LLM tests for all four nodes**
 
-Run: `python -m pytest tests/ -v`
-Expected: All previous tests still PASS (these nodes are tested via integration in task 11)
+Append to `tests/test_nodes.py`:
+```python
+from unittest.mock import AsyncMock
+from attractor.nodes.planner import planner
+from attractor.nodes.scenario_validator import scenario_validator
+from attractor.nodes.diagnoser import diagnoser
+from attractor.nodes.reviewer import reviewer
 
-- [ ] **Step 6: Commit**
+
+def _make_mock_llm(content: str) -> AsyncMock:
+    """Create a mock LLMClient that returns the given content."""
+    mock = AsyncMock()
+    mock.complete.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": content}}],
+    }
+    mock.complete_structured.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": content}}],
+    }
+    return mock
+
+
+@pytest.mark.asyncio
+async def test_planner_extracts_plan_and_test_command():
+    mock_llm = _make_mock_llm('{"implementation_plan": "Step 1: do stuff", "test_command": "pytest"}')
+    state = {"spec": "# Build a thing", "scenarios": "", "workspace_path": "", "implementation_plan": "", "cycle": 0, "max_cycles": 10, "steering_prompt": "", "test_output": "", "test_exit_code": -1, "test_command": "", "validation_result": {}, "tool_call_history": [], "diff_history": [], "review_report": "", "summary": ""}
+    result = await planner(state, llm=mock_llm, model="openrouter/test-model")
+    assert result["implementation_plan"] == "Step 1: do stuff"
+    assert result["test_command"] == "pytest"
+    mock_llm.complete_structured.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_scenario_validator_returns_structured_result():
+    mock_llm = _make_mock_llm('{"passed": true, "satisfaction_score": 0.95, "failing_scenarios": [], "diagnosis": ""}')
+    state = {"spec": "", "scenarios": "## Scenario 1", "workspace_path": "/tmp", "implementation_plan": "", "cycle": 0, "max_cycles": 10, "steering_prompt": "", "test_output": "all passed", "test_exit_code": 0, "test_command": "pytest", "validation_result": {}, "tool_call_history": [], "diff_history": ["some diff"], "review_report": "", "summary": ""}
+    result = await scenario_validator(state, llm=mock_llm, model="openrouter/test-model")
+    assert result["validation_result"]["passed"] is True
+    assert result["validation_result"]["satisfaction_score"] == 0.95
+
+
+@pytest.mark.asyncio
+async def test_diagnoser_increments_cycle():
+    mock_llm = _make_mock_llm("Fix the bug in main.py line 10")
+    state = {"spec": "# Spec", "scenarios": "", "workspace_path": "", "implementation_plan": "", "cycle": 2, "max_cycles": 10, "steering_prompt": "", "test_output": "FAILED", "test_exit_code": 1, "test_command": "pytest", "validation_result": {"passed": False, "diagnosis": "test failed"}, "tool_call_history": [], "diff_history": ["diff"], "review_report": "", "summary": ""}
+    result = await diagnoser(state, llm=mock_llm, model="openrouter/test-model")
+    assert result["cycle"] == 3
+    assert "Fix the bug" in result["steering_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_reviewer_returns_report():
+    mock_llm = _make_mock_llm("Code looks good. Minor: add docstrings.")
+    state = {"spec": "# Spec", "scenarios": "## Scenario 1", "workspace_path": "", "implementation_plan": "", "cycle": 1, "max_cycles": 10, "steering_prompt": "", "test_output": "", "test_exit_code": 0, "test_command": "pytest", "validation_result": {"passed": True}, "tool_call_history": [], "diff_history": ["diff content"], "review_report": "", "summary": ""}
+    result = await reviewer(state, llm=mock_llm, model="openrouter/test-model")
+    assert "docstrings" in result["review_report"]
+```
+
+- [ ] **Step 6: Run all node tests**
+
+Run: `python -m pytest tests/test_nodes.py -v`
+Expected: 8 PASSED
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/attractor/nodes/planner.py src/attractor/nodes/scenario_validator.py src/attractor/nodes/diagnoser.py src/attractor/nodes/reviewer.py
-git commit -m "feat: LLM nodes — planner, scenario_validator, diagnoser, reviewer"
+git add src/attractor/nodes/planner.py src/attractor/nodes/scenario_validator.py src/attractor/nodes/diagnoser.py src/attractor/nodes/reviewer.py tests/test_nodes.py
+git commit -m "feat: LLM nodes — planner, scenario_validator, diagnoser, reviewer with tests"
 ```
 
 ---
@@ -2172,9 +2275,17 @@ def _truncate_context(messages: list[dict], char_limit: int) -> list[dict]:
     if total_chars <= char_limit:
         return messages
 
-    # Keep system message (index 0) and first user message (index 1)
-    keep_start = messages[:2]
-    remaining = messages[2:]
+    # Keep system message + first 2 user messages
+    keep_start = []
+    user_count = 0
+    for msg in messages:
+        if msg["role"] == "system" or (msg["role"] == "user" and user_count < 2):
+            keep_start.append(msg)
+            if msg["role"] == "user":
+                user_count += 1
+        else:
+            break
+    remaining = messages[len(keep_start):]
 
     # From the end, keep messages until we hit the budget
     budget = char_limit - sum(len(json.dumps(m)) for m in keep_start)
@@ -2216,8 +2327,7 @@ async def implementer(
 ) -> dict[str, Any]:
     """Run the implementer's inner agentic loop."""
     workspace_path = state["workspace_path"]
-    ws = Workspace.__new__(Workspace)
-    ws.path = workspace_path
+    ws = Workspace.reopen(workspace_path)
 
     # Build initial messages
     messages: list[dict] = []
@@ -2323,15 +2433,89 @@ async def implementer(
     }
 ```
 
-- [ ] **Step 2: Run full test suite to verify no regressions**
+- [ ] **Step 2: Write implementer tests with mocked LLM**
+
+Append to `tests/test_nodes.py`:
+```python
+from attractor.nodes.implementer import implementer, _detect_loop, _truncate_context
+
+
+def test_detect_loop_no_pattern():
+    history = [("read_file", "a"), ("write_file", "b"), ("run_shell", "c")]
+    assert _detect_loop(history) is None
+
+
+def test_detect_loop_pattern_len_2():
+    history = [("read_file", "a"), ("write_file", "b"), ("read_file", "a"), ("write_file", "b")]
+    assert _detect_loop(history) is not None
+
+
+def test_detect_loop_pattern_len_3():
+    history = [("a", "1"), ("b", "2"), ("c", "3"), ("a", "1"), ("b", "2"), ("c", "3")]
+    assert _detect_loop(history) is not None
+
+
+def test_truncate_context_under_limit():
+    msgs = [{"role": "system", "content": "hi"}, {"role": "user", "content": "hello"}]
+    result = _truncate_context(msgs, 100_000)
+    assert len(result) == 2
+
+
+def test_truncate_context_over_limit():
+    msgs = [{"role": "system", "content": "sys"}]
+    msgs += [{"role": "user", "content": "x" * 1000}]
+    msgs += [{"role": "assistant", "content": f"msg{i}"} for i in range(50)]
+    result = _truncate_context(msgs, 2000)
+    # Should have system + first user + truncation marker + tail
+    assert result[0]["role"] == "system"
+    assert result[1]["role"] == "user"
+    assert "[... earlier context truncated ...]" in result[2]["content"]
+    assert len(result) < len(msgs)
+
+
+@pytest.mark.asyncio
+async def test_implementer_single_round_no_tools(tmp_path):
+    """LLM returns no tool calls — implementer exits immediately."""
+    import subprocess
+    # Set up a real workspace for commit_checkpoint
+    ws_dir = tmp_path / "ws"
+    ws_dir.mkdir()
+    (ws_dir / "file.py").write_text("x = 1\n")
+    subprocess.run(["git", "init"], cwd=ws_dir, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=ws_dir, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=ws_dir, capture_output=True,
+        env={**subprocess.os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+    )
+
+    mock_llm = _make_mock_llm("I have reviewed the code and no changes are needed.")
+    state = {
+        "spec": "# Spec", "scenarios": "", "workspace_path": str(ws_dir),
+        "implementation_plan": "Step 1: review code", "cycle": 0, "max_cycles": 10,
+        "steering_prompt": "", "test_output": "", "test_exit_code": -1,
+        "test_command": "", "validation_result": {}, "tool_call_history": [],
+        "diff_history": [], "review_report": "", "summary": "",
+    }
+    result = await implementer(state, llm=mock_llm, model="openrouter/test-model")
+    assert isinstance(result["tool_call_history"], list)
+    assert isinstance(result["diff_history"], list)
+```
+
+- [ ] **Step 3: Run implementer tests**
+
+Run: `python -m pytest tests/test_nodes.py -v -k "implementer or detect_loop or truncate_context"`
+Expected: 6 PASSED
+
+- [ ] **Step 4: Run full test suite**
 
 Run: `python -m pytest tests/ -v`
-Expected: All existing tests PASS
+Expected: All PASS
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/attractor/nodes/implementer.py
+git add src/attractor/nodes/implementer.py tests/test_nodes.py
 git commit -m "feat: implementer node with agentic loop, loop detection, context management"
 ```
 
@@ -2421,36 +2605,55 @@ def _wrap_node(node_fn, name: str, config: PipelineConfig | None = None, llm: LL
         logger = get_logger("attractor.graph", node=name)
         logger.info("entering node", event_type="NODE_ENTER")
 
-        # Determine if this node needs LLM + model
-        if llm and config:
-            model_map = {
-                "planner": config.llm.models.planner,
-                "implementer": config.llm.models.implementer,
-                "scenario_validator": config.llm.models.validator,
-                "diagnoser": config.llm.models.diagnoser,
-                "reviewer": config.llm.models.reviewer,
-            }
-            if name in model_map:
-                if name == "implementer":
-                    result = await node_fn(
-                        state, llm=llm, model=model_map[name],
-                        context_char_limit=config.pipeline.context_char_limit,
-                        tool_output_truncation=config.pipeline.tool_output_truncation,
-                        loop_detection_window=config.pipeline.loop_detection_window,
-                    )
-                elif name == "test_runner":
-                    result = await node_fn(
-                        state,
-                        config_test_command=config.pipeline.test_command,
-                    )
+        try:
+            # Determine if this node needs LLM + model
+            if llm and config:
+                model_map = {
+                    "planner": config.llm.models.planner,
+                    "implementer": config.llm.models.implementer,
+                    "scenario_validator": config.llm.models.validator,
+                    "diagnoser": config.llm.models.diagnoser,
+                    "reviewer": config.llm.models.reviewer,
+                }
+                if name in model_map:
+                    if name == "implementer":
+                        result = await node_fn(
+                            state, llm=llm, model=model_map[name],
+                            context_char_limit=config.pipeline.context_char_limit,
+                            tool_output_truncation=config.pipeline.tool_output_truncation,
+                            loop_detection_window=config.pipeline.loop_detection_window,
+                        )
+                    elif name == "test_runner":
+                        result = await node_fn(
+                            state,
+                            config_test_command=config.pipeline.test_command,
+                            test_timeout=config.pipeline.test_timeout,
+                        )
+                    else:
+                        result = await node_fn(state, llm=llm, model=model_map[name])
                 else:
-                    result = await node_fn(state, llm=llm, model=model_map[name])
+                    result = await node_fn(state)
+            elif name == "test_runner" and config:
+                result = await node_fn(
+                    state,
+                    config_test_command=config.pipeline.test_command,
+                    test_timeout=config.pipeline.test_timeout,
+                )
             else:
                 result = await node_fn(state)
-        elif name == "test_runner" and config:
-            result = await node_fn(state, config_test_command=config.pipeline.test_command)
-        else:
-            result = await node_fn(state)
+        except Exception as e:
+            # Persist error state before re-raising
+            ws_path = state.get("workspace_path", "")
+            if ws_path:
+                save_run_state(
+                    state,
+                    Path(ws_path) / "run_state.json",
+                    status="error",
+                    node=name,
+                    error=str(e),
+                )
+            logger.error("node failed", event_type="NODE_EXIT", error=str(e))
+            raise
 
         # Save run state after node exit
         merged = {**state, **result}
