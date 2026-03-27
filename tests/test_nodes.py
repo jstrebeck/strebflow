@@ -76,3 +76,63 @@ async def test_done_writes_summary(tmp_path):
     assert (tmp_path / "run_state.json").exists()
     run_state = json.loads((tmp_path / "run_state.json").read_text())
     assert run_state["status"] == "completed"
+
+
+from unittest.mock import AsyncMock
+from attractor.nodes.planner import planner
+from attractor.nodes.scenario_validator import scenario_validator
+from attractor.nodes.diagnoser import diagnoser
+from attractor.nodes.reviewer import reviewer
+
+def _make_mock_llm(content: str) -> AsyncMock:
+    """Create a mock LLMClient that returns the given content."""
+    mock = AsyncMock()
+    mock.complete.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": content}}],
+    }
+    mock.complete_structured.return_value = {
+        "choices": [{"message": {"role": "assistant", "content": content}}],
+    }
+    return mock
+
+@pytest.mark.asyncio
+async def test_planner_extracts_plan_and_test_command():
+    mock_llm = _make_mock_llm('{"implementation_plan": "Step 1: do stuff", "test_command": "pytest"}')
+    state = {"spec": "# Build a thing", "scenarios": "", "workspace_path": "", "implementation_plan": "", "cycle": 0, "max_cycles": 10, "steering_prompt": "", "test_output": "", "test_exit_code": -1, "test_command": "", "validation_result": {}, "tool_call_history": [], "diff_history": [], "review_report": "", "summary": ""}
+    result = await planner(state, llm=mock_llm, model="openrouter/test-model")
+    assert result["implementation_plan"] == "Step 1: do stuff"
+    assert result["test_command"] == "pytest"
+    mock_llm.complete_structured.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_scenario_validator_returns_structured_result(tmp_path):
+    # Need a real git workspace for Workspace.reopen()
+    import subprocess
+    ws = tmp_path / "validator_ws"
+    ws.mkdir()
+    (ws / "file.py").write_text("x = 1\n")
+    subprocess.run(["git", "init"], cwd=ws, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=ws, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=ws, capture_output=True,
+        env={**subprocess.os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
+
+    mock_llm = _make_mock_llm('{"passed": true, "satisfaction_score": 0.95, "failing_scenarios": [], "diagnosis": ""}')
+    state = {"spec": "", "scenarios": "## Scenario 1", "workspace_path": str(ws), "implementation_plan": "", "cycle": 0, "max_cycles": 10, "steering_prompt": "", "test_output": "all passed", "test_exit_code": 0, "test_command": "pytest", "validation_result": {}, "tool_call_history": [], "diff_history": ["some diff"], "review_report": "", "summary": ""}
+    result = await scenario_validator(state, llm=mock_llm, model="openrouter/test-model")
+    assert result["validation_result"]["passed"] is True
+    assert result["validation_result"]["satisfaction_score"] == 0.95
+
+@pytest.mark.asyncio
+async def test_diagnoser_increments_cycle():
+    mock_llm = _make_mock_llm("Fix the bug in main.py line 10")
+    state = {"spec": "# Spec", "scenarios": "", "workspace_path": "", "implementation_plan": "", "cycle": 2, "max_cycles": 10, "steering_prompt": "", "test_output": "FAILED", "test_exit_code": 1, "test_command": "pytest", "validation_result": {"passed": False, "diagnosis": "test failed"}, "tool_call_history": [], "diff_history": ["diff"], "review_report": "", "summary": ""}
+    result = await diagnoser(state, llm=mock_llm, model="openrouter/test-model")
+    assert result["cycle"] == 3
+    assert "Fix the bug" in result["steering_prompt"]
+
+@pytest.mark.asyncio
+async def test_reviewer_returns_report():
+    mock_llm = _make_mock_llm("Code looks good. Minor: add docstrings.")
+    state = {"spec": "# Spec", "scenarios": "## Scenario 1", "workspace_path": "", "implementation_plan": "", "cycle": 1, "max_cycles": 10, "steering_prompt": "", "test_output": "", "test_exit_code": 0, "test_command": "pytest", "validation_result": {"passed": True}, "tool_call_history": [], "diff_history": ["diff content"], "review_report": "", "summary": ""}
+    result = await reviewer(state, llm=mock_llm, model="openrouter/test-model")
+    assert "docstrings" in result["review_report"]
