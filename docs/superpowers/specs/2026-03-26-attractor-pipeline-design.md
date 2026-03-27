@@ -62,11 +62,13 @@ class PipelineState(TypedDict):
     summary: str
 ```
 
-Each node receives the full state and returns a partial dict of updates (LangGraph merges them). The `cycle` counter increments each time the `diagnoser → implementer` loop fires.
+Each node receives the full state and returns a partial dict of updates (LangGraph merges them). The `cycle` counter increments each time the diagnoser runs.
+
+**Cycle lifecycle example:** Cycle 0 is the initial implementation. After test_runner and scenario_validator, if validation fails, scenario_validator checks `cycle < max_cycles` (0 < 10 → true) and routes to diagnoser. Diagnoser increments cycle to 1 and produces a steering prompt. The implementer re-enters with cycle=1. This repeats. After 10 diagnoser increments, cycle == 10, scenario_validator sees `cycle >= max_cycles` and routes to done. The system gets exactly `max_cycles` re-implementation attempts.
 
 ### Run State Persistence
 
-After every node exit, the current state (minus large fields like full tool call history) is serialized to `run_state.json` in the run directory. This powers the `status` CLI command and provides a foundation for future `resume` support.
+After every node exit, the current state is serialized to `run_state.json` in the run directory. `tool_call_history` is included (it is compact — just name, args_hash, and cycle per entry). Full LLM message histories are excluded. This powers the `status` CLI command and provides a foundation for future `resume` support.
 
 ## 2. Implementer Inner Loop
 
@@ -113,6 +115,13 @@ build messages (system + plan + steering)
 - After each tool call, scan for repeating patterns of length 2 or 3
 - If detected: inject a steering message telling the LLM it's looping and to try a different approach
 
+### Error Recovery Guidance
+
+The implementer's system prompt should include instructions for handling common tool failures:
+- **`edit_file` ambiguity:** "If edit_file fails because old_str matches multiple locations, retry with more surrounding context in old_str to make it unique. If the file is small, use write_file to replace the entire file instead."
+- **`run_shell` timeout:** "If a command times out, try breaking it into smaller steps or increasing the timeout parameter."
+- **General failures:** "If a tool call fails, read the error message carefully and adjust your approach rather than retrying the same call."
+
 ### Tool Output Handling
 
 - Full output stored in state for logging
@@ -133,10 +142,10 @@ Six tools, all executed with `workspace_path` as cwd:
 | `write_file` | `(path: str, content: str) -> str` | Write file, create parent dirs. Return confirmation. |
 | `edit_file` | `(path: str, old_str: str, new_str: str) -> str` | Exact string replacement. Error if `old_str` not found or ambiguous (multiple matches). |
 | `run_shell` | `(command: str, timeout: int = 30) -> dict` | Run in subprocess, return `{stdout, stderr, exit_code}`. Cwd locked to workspace. |
-| `list_files` | `(path: str = ".") -> list[str]` | Recursive listing, respects `.gitignore`. Uses `git ls-files` + untracked. |
+| `list_files` | `(path: str = ".") -> list[str]` | Recursive listing, respects `.gitignore`. Uses `git ls-files` + untracked. Capped at 500 entries; if exceeded, returns first 500 with a note. |
 | `grep` | `(pattern: str, path: str = ".") -> list[str]` | Search file contents via `grep -rn`. Return matching lines with `file:line` prefix. |
 
-Tools are defined as plain async Python functions. They're converted to OpenAI-format tool schemas for the LLM call and dispatched by name when the LLM returns tool calls.
+Tools are defined as plain async Python functions. They're converted to OpenAI-format tool schemas for the LLM call and dispatched by name when the LLM returns tool calls. All tool outputs are subject to the 8000-char truncation (first 4000 + last 4000) before being added to LLM messages.
 
 ## 4. Workspace
 
@@ -178,10 +187,10 @@ class OpenRouterClient:
 ## 6. Node Details
 
 ### spec_loader
-No LLM. Reads spec + scenarios files from disk. Initializes state with `cycle: 0`, `max_cycles` from config, empty histories.
+No LLM. Reads spec + scenarios files from disk. Scenarios are plain markdown with one scenario per section — each has a heading (name) and body (acceptance criteria). The file is passed as raw text to the scenario_validator LLM; no structured parsing is required. Initializes state with `cycle: 0`, `max_cycles` from config, empty histories.
 
 ### planner
-Single LLM call. System prompt describes its role. User message contains the full spec. Returns implementation plan as markdown, including a recommended `test_command`. No tools.
+Single LLM call via `complete_structured()`. System prompt describes its role. User message contains the full spec. Returns a JSON object with two fields: `implementation_plan` (markdown string) and `test_command` (string, the recommended command to run tests). The `test_command` is stored in `PipelineState.test_command`. No tools.
 
 ### implementer
 Agentic inner loop (see Section 2). On first cycle, receives the plan. On subsequent cycles, receives `steering_prompt` from diagnoser. After exiting, workspace commits a checkpoint.
@@ -192,7 +201,7 @@ No LLM. Runs the test command. Priority for test command selection:
 2. Planner output (`test_command` field)
 3. Auto-detect: `pyproject.toml` → `pytest`, `package.json` → `npm test`, `Makefile` → `make test`
 
-Captures stdout/stderr/exit_code. Timeout configurable (default 120s).
+Captures stdout/stderr/exit_code. Timeout configurable (default 120s). The test_runner uses `workspace.run_isolated()` directly (not the `run_shell` coding tool), with its own configurable timeout.
 
 ### scenario_validator
 Single LLM call via `complete_structured()`. Receives: scenarios file, test output, current workspace diff. Returns:
@@ -212,7 +221,11 @@ Single LLM call. Receives: validation result, test output, recent diff, original
 Single LLM call. Only reached on convergence (scenarios pass). Receives: full diff, spec, scenarios. Produces a review report. Informational only.
 
 ### done
-No LLM. Writes `summary.md` to run directory (cycles taken, satisfaction score, review report, files changed). Final `run_state.json` update with `status: "completed"` or `status: "exhausted"`.
+No LLM. Implemented as a full LangGraph node (not the built-in END sentinel). Writes `summary.md` to run directory (cycles taken, satisfaction score, review report, files changed). Final `run_state.json` update with `status: "completed"` or `status: "exhausted"`.
+
+### Error Propagation
+
+If an LLM call fails after all retries (3 attempts with exponential backoff), the node raises an exception. LangGraph halts the graph. The last `run_state.json` snapshot reflects the state before the failed node. The `status` command will show `status: "error"` with the failure reason.
 
 ## 7. Configuration
 
