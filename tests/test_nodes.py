@@ -136,3 +136,59 @@ async def test_reviewer_returns_report():
     state = {"spec": "# Spec", "scenarios": "## Scenario 1", "workspace_path": "", "implementation_plan": "", "cycle": 1, "max_cycles": 10, "steering_prompt": "", "test_output": "", "test_exit_code": 0, "test_command": "pytest", "validation_result": {"passed": True}, "tool_call_history": [], "diff_history": ["diff content"], "review_report": "", "summary": ""}
     result = await reviewer(state, llm=mock_llm, model="openrouter/test-model")
     assert "docstrings" in result["review_report"]
+
+
+from attractor.nodes.implementer import implementer, _detect_loop, _truncate_context
+
+def test_detect_loop_no_pattern():
+    history = [("read_file", "a"), ("write_file", "b"), ("run_shell", "c")]
+    assert _detect_loop(history) is None
+
+def test_detect_loop_pattern_len_2():
+    history = [("read_file", "a"), ("write_file", "b"), ("read_file", "a"), ("write_file", "b")]
+    assert _detect_loop(history) is not None
+
+def test_detect_loop_pattern_len_3():
+    history = [("a", "1"), ("b", "2"), ("c", "3"), ("a", "1"), ("b", "2"), ("c", "3")]
+    assert _detect_loop(history) is not None
+
+def test_truncate_context_under_limit():
+    msgs = [{"role": "system", "content": "hi"}, {"role": "user", "content": "hello"}]
+    result = _truncate_context(msgs, 100_000)
+    assert len(result) == 2
+
+def test_truncate_context_over_limit():
+    msgs = [{"role": "system", "content": "sys"}]
+    msgs += [{"role": "user", "content": "x" * 1000}]
+    msgs += [{"role": "assistant", "content": f"msg{i}"} for i in range(50)]
+    result = _truncate_context(msgs, 2000)
+    assert result[0]["role"] == "system"
+    assert result[1]["role"] == "user"
+    assert "[... earlier context truncated ...]" in result[2]["content"]
+    assert len(result) < len(msgs)
+
+@pytest.mark.asyncio
+async def test_implementer_single_round_no_tools(tmp_path):
+    """LLM returns no tool calls — implementer exits immediately."""
+    import subprocess
+    ws_dir = tmp_path / "ws"
+    ws_dir.mkdir()
+    (ws_dir / "file.py").write_text("x = 1\n")
+    subprocess.run(["git", "init"], cwd=ws_dir, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=ws_dir, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=ws_dir, capture_output=True,
+        env={**subprocess.os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+    )
+    mock_llm = _make_mock_llm("I have reviewed the code and no changes are needed.")
+    state = {
+        "spec": "# Spec", "scenarios": "", "workspace_path": str(ws_dir),
+        "implementation_plan": "Step 1: review code", "cycle": 0, "max_cycles": 10,
+        "steering_prompt": "", "test_output": "", "test_exit_code": -1,
+        "test_command": "", "validation_result": {}, "tool_call_history": [],
+        "diff_history": [], "review_report": "", "summary": "",
+    }
+    result = await implementer(state, llm=mock_llm, model="openrouter/test-model")
+    assert isinstance(result["tool_call_history"], list)
+    assert isinstance(result["diff_history"], list)
