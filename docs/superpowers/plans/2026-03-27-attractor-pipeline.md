@@ -2606,39 +2606,29 @@ def _wrap_node(node_fn, name: str, config: PipelineConfig | None = None, llm: LL
         logger.info("entering node", event_type="NODE_ENTER")
 
         try:
-            # Determine if this node needs LLM + model
-            if llm and config:
-                model_map = {
-                    "planner": config.llm.models.planner,
-                    "implementer": config.llm.models.implementer,
-                    "scenario_validator": config.llm.models.validator,
-                    "diagnoser": config.llm.models.diagnoser,
-                    "reviewer": config.llm.models.reviewer,
-                }
-                if name in model_map:
-                    if name == "implementer":
-                        result = await node_fn(
-                            state, llm=llm, model=model_map[name],
-                            context_char_limit=config.pipeline.context_char_limit,
-                            tool_output_truncation=config.pipeline.tool_output_truncation,
-                            loop_detection_window=config.pipeline.loop_detection_window,
-                        )
-                    elif name == "test_runner":
-                        result = await node_fn(
-                            state,
-                            config_test_command=config.pipeline.test_command,
-                            test_timeout=config.pipeline.test_timeout,
-                        )
-                    else:
-                        result = await node_fn(state, llm=llm, model=model_map[name])
-                else:
-                    result = await node_fn(state)
-            elif name == "test_runner" and config:
+            # Determine how to call this node based on its type
+            model_map = {
+                "planner": config.llm.models.planner if config else None,
+                "implementer": config.llm.models.implementer if config else None,
+                "scenario_validator": config.llm.models.validator if config else None,
+                "diagnoser": config.llm.models.diagnoser if config else None,
+                "reviewer": config.llm.models.reviewer if config else None,
+            }
+            if name == "test_runner" and config:
                 result = await node_fn(
                     state,
                     config_test_command=config.pipeline.test_command,
                     test_timeout=config.pipeline.test_timeout,
                 )
+            elif name == "implementer" and llm and config:
+                result = await node_fn(
+                    state, llm=llm, model=model_map[name],
+                    context_char_limit=config.pipeline.context_char_limit,
+                    tool_output_truncation=config.pipeline.tool_output_truncation,
+                    loop_detection_window=config.pipeline.loop_detection_window,
+                )
+            elif name in model_map and model_map[name] and llm:
+                result = await node_fn(state, llm=llm, model=model_map[name])
             else:
                 result = await node_fn(state)
         except Exception as e:
@@ -2762,6 +2752,7 @@ def generate_run_id() -> str:
 async def cmd_run(args: argparse.Namespace) -> None:
     """Execute a pipeline run."""
     config = load_config(args.config)
+    # Initial logging to stdout only (workspace doesn't exist yet)
     setup_logging(level=config.logging.level, structured=config.logging.structured)
     logger = get_logger("attractor.cli")
 
@@ -2775,8 +2766,10 @@ async def cmd_run(args: argparse.Namespace) -> None:
         target_repo=args.repo,
     )
 
-    # Set up log file
+    # Reconfigure logging to also write to run.log
     log_path = Path(workspace.path) / "run.log"
+    setup_logging(level=config.logging.level, structured=config.logging.structured, log_file=log_path)
+    logger = get_logger("attractor.cli")
     logger.info("workspace created", path=workspace.path)
 
     # Build LLM client
