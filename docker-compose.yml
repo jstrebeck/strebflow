@@ -1,0 +1,13 @@
+services:
+  attractor:
+    build: .
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - VASTAI_API_KEY=${VASTAI_API_KEY:-}
+      - VASTAI_BASE_URL=${VASTAI_BASE_URL:-}
+    volumes:
+      - ./runs:/home/attractor/workspace/runs
+      - ./specs:/home/attractor/workspace/specs
+      - ./logs:/home/attractor/workspace/logs
+      - ./target:/home/attractor/workspace/target:ro
+    command: ["run", "--spec", "/home/attractor/workspace/specs/spec.md", "--scenarios", "/home/attractor/workspace/specs/scenarios.md", "--repo", "/home/attractor/workspace/target"]
