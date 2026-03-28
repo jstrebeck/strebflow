@@ -1,0 +1,6 @@
+# Placeholder — attractor does not require cluster access initially.
+# Add ServiceAccount + Role if future features need Kubernetes API access.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: attractor

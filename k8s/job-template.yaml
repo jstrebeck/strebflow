@@ -1,0 +1,54 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: attractor-${RUN_ID}
+  labels:
+    app: attractor
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: attractor
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: attractor
+          image: attractor:latest
+          args:
+            - run
+            - --spec
+            - /workspace/specs/${SPEC_FILE}
+            - --scenarios
+            - /workspace/specs/${SCENARIOS_FILE}
+            - --repo
+            - /workspace/target
+            - --run-id
+            - ${RUN_ID}
+            - --config
+            - /config/pipeline_config.yaml
+          env:
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: attractor-secrets
+                  key: openrouter-api-key
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: attractor-workspace
+        - name: config
+          configMap:
+            name: attractor-config
