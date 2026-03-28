@@ -1,0 +1,41 @@
+llm:
+  providers:
+    openrouter:
+      base_url: https://openrouter.ai/api/v1
+      api_key: ${OPENROUTER_API_KEY}
+    # vastai:
+    #   base_url: ${VASTAI_BASE_URL}
+    #   api_key: ${VASTAI_API_KEY}
+  models:
+    planner: openrouter/anthropic/claude-sonnet-4-5
+    implementer: openrouter/anthropic/claude-sonnet-4-5
+    validator: openrouter/anthropic/claude-sonnet-4-5
+    diagnoser: openrouter/openai/o3
+    reviewer: openrouter/anthropic/claude-sonnet-4-5
+
+pipeline:
+  max_cycles: 10
+  loop_detection_window: 10
+  tool_output_truncation: 8000
+  context_char_limit: 400000
+  context_truncation_strategy: middle
+  test_command: null  # override auto-detection; null = let planner/auto-detect decide
+  test_timeout: 120
+
+workspace:
+  # Relative paths for local dev. Docker/K8s configs use absolute paths
+  # (e.g., /workspace/runs, /workspace/target)
+  base_path: ./runs
+  target_repo: ./target
+
+logging:
+  level: INFO
+  structured: true
+  events:
+    - CYCLE_START
+    - TOOL_CALL_START
+    - TOOL_CALL_END
+    - NODE_ENTER
+    - NODE_EXIT
+    - CONVERGENCE
+    - LOOP_DETECTED
