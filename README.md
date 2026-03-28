@@ -259,6 +259,8 @@ Manifests are in `k8s/`. To run the pipeline as a Kubernetes Job:
 
 ## Writing specs
 
+Prefix spec and scenario files with `draft-` to keep them out of version control (e.g. `specs/draft-my-feature.md`). These are ignored by `.gitignore`.
+
 Spec files are plain markdown. No special format is required -- the planner LLM reads them as-is. Include:
 
 - What to build (feature description)

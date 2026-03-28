@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Project
+pyproject.toml
+runs/
+logs/
+target/
+
+# Draft specs/scenarios (prefix with "draft-" to keep local)
+specs/draft-*
