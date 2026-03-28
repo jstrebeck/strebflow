@@ -19,6 +19,8 @@ pipeline:
   tool_output_truncation: 8000
   context_char_limit: 400000
   context_truncation_strategy: middle
+  test_command: null  # override auto-detection; null = let planner/auto-detect decide
+  test_timeout: 120
 
 workspace:
   # Relative paths for local dev. Docker/K8s configs use absolute paths
@@ -29,3 +31,11 @@ workspace:
 logging:
   level: INFO
   structured: true
+  events:
+    - CYCLE_START
+    - TOOL_CALL_START
+    - TOOL_CALL_END
+    - NODE_ENTER
+    - NODE_EXIT
+    - CONVERGENCE
+    - LOOP_DETECTED

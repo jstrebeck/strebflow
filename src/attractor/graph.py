@@ -22,11 +22,13 @@ from attractor.nodes.done import done
 
 
 def route_after_validation(state: dict[str, Any]) -> str:
+    logger = get_logger("attractor.graph")
     validation = state.get("validation_result", {})
     passed = validation.get("passed", False)
     cycle = state.get("cycle", 0)
     max_cycles = state.get("max_cycles", 10)
     if passed:
+        logger.info("scenarios passed", event_type="CONVERGENCE", cycle=cycle)
         return "reviewer"
     if cycle >= max_cycles:
         return "done"

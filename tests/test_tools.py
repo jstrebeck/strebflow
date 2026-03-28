@@ -99,13 +99,7 @@ async def test_list_files(workspace_dir):
 # --- grep ---
 @pytest.mark.asyncio
 async def test_grep(workspace_dir):
-    import subprocess
-    subprocess.run(["git", "add", "-A"], cwd=workspace_dir, capture_output=True)
-    subprocess.run(
-        ["git", "commit", "-m", "init"],
-        cwd=workspace_dir, capture_output=True,
-        env={**subprocess.os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"},
-    )
+    # grep uses plain grep, no git commit needed
     results = await grep("line2", ".", str(workspace_dir))
     assert any("existing.py" in r and "line2" in r for r in results)
 

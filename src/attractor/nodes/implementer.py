@@ -10,6 +10,7 @@ from attractor.tools import (
 )
 from attractor.state import save_run_state
 from attractor.workspace import Workspace
+from attractor.logging import get_logger
 
 IMPLEMENTER_SYSTEM = """You are an expert software engineer implementing a feature in an existing codebase.
 
@@ -84,6 +85,7 @@ async def implementer(
     tool_output_truncation: int = 8000,
     loop_detection_window: int = 10,
 ) -> dict[str, Any]:
+    logger = get_logger("attractor.implementer")
     workspace_path = state["workspace_path"]
     ws = Workspace.reopen(workspace_path)
 
@@ -102,6 +104,7 @@ async def implementer(
     call_tracker: list[tuple[str, str]] = []
     tool_call_history = list(state.get("tool_call_history", []))
     cycle = state.get("cycle", 0)
+    logger.info("cycle starting", event_type="CYCLE_START", cycle=cycle)
 
     while True:
         messages = _truncate_context(messages, context_char_limit)
@@ -121,7 +124,9 @@ async def implementer(
                 func_args = json.loads(tc["function"]["arguments"])
             except json.JSONDecodeError:
                 func_args = {}
+            logger.info("tool call", event_type="TOOL_CALL_START", tool=func_name)
             full_result = await dispatch_tool(func_name, func_args, workspace_path)
+            logger.info("tool done", event_type="TOOL_CALL_END", tool=func_name)
             args_hash = hash_tool_args(func_args)
             call_tracker.append((func_name, args_hash))
             tool_call_history.append({"name": func_name, "args_hash": args_hash, "cycle": cycle})
@@ -130,6 +135,7 @@ async def implementer(
 
         loop_msg = _detect_loop(call_tracker, loop_detection_window)
         if loop_msg:
+            logger.warning("loop detected", event_type="LOOP_DETECTED", pattern=loop_msg)
             messages.append({
                 "role": "user",
                 "content": (

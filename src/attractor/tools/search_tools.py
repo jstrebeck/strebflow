@@ -28,9 +28,15 @@ async def grep(pattern: str, path: str, workspace: str) -> list[str]:
     if not str(target).startswith(str(ws)):
         return [f"Error: path '{path}' resolves outside the workspace"]
     try:
-        result = subprocess.run(["git", "grep", "-rn", "--no-color", pattern, "--", str(target)], cwd=str(ws), capture_output=True, text=True)
+        # Use plain grep to find uncommitted/unstaged files too
+        result = subprocess.run(
+            ["grep", "-rn", "--exclude-dir=.git", pattern, str(target)],
+            capture_output=True, text=True,
+        )
         if result.returncode == 1: return []
         lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
-        return lines
+        # Make paths relative to workspace
+        ws_str = str(ws) + "/"
+        return [line.replace(ws_str, "") for line in lines]
     except Exception as e:
         return [f"Error searching: {e}"]
