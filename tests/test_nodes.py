@@ -63,7 +63,7 @@ async def test_done_writes_summary(tmp_path):
         "workspace_path": str(tmp_path), "cycle": 3, "max_cycles": 10,
         "validation_result": {"passed": True, "satisfaction_score": 0.95},
         "review_report": "Looks good. Minor style issues.",
-        "diff_history": ["diff1", "diff2", "diff3"],
+        "latest_diff": "diff3",
         "spec": "# Spec", "scenarios": "# Scenarios",
         "implementation_plan": "", "steering_prompt": "",
         "test_output": "", "test_exit_code": 0, "test_command": "pytest",

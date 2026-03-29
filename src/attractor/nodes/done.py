@@ -12,14 +12,12 @@ async def done(state: dict[str, Any]) -> dict[str, Any]:
     cycles_used = state.get("cycle", 0)
     max_cycles = state.get("max_cycles", 0)
     review = state.get("review_report", "")
-    diffs = state.get("diff_history", [])
     status = "completed" if passed else "exhausted"
     summary_lines = [
         f"# Pipeline Run Summary", "",
         f"**Status:** {status}",
         f"**Cycles used:** {cycles_used} / {max_cycles}",
         f"**Satisfaction score:** {score}",
-        f"**Files changed:** {len(diffs)} checkpoint(s)", "",
     ]
     if review:
         summary_lines.extend([f"## Review Report", "", review, ""])
