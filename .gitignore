@@ -13,3 +13,6 @@ target/
 
 # Draft specs/scenarios (prefix with "draft-" to keep local)
 specs/draft-*
+
+# Superpowers brainstorm sessions
+.superpowers/
