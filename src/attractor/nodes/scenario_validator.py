@@ -29,6 +29,17 @@ VALIDATOR_SCHEMA = {
     "required": ["passed", "satisfaction_score", "failing_scenarios", "diagnosis"],
 }
 
+_MAX_DIFF_CHARS = 200_000
+_MAX_TEST_OUTPUT_CHARS = 50_000
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + "\n\n[... truncated ...]\n\n" + text[-half:]
+
+
 async def scenario_validator(state: dict[str, Any], llm: LLMClient, model: str) -> dict[str, Any]:
     try:
         ws = Workspace.reopen(state["workspace_path"])
@@ -39,10 +50,10 @@ async def scenario_validator(state: dict[str, Any], llm: LLMClient, model: str) 
 {state['scenarios']}
 
 ## Test Output (exit code: {state['test_exit_code']})
-{state['test_output']}
+{_truncate(state['test_output'], _MAX_TEST_OUTPUT_CHARS)}
 
 ## Code Diff (cumulative from initial state)
-{current_diff}"""
+{_truncate(current_diff, _MAX_DIFF_CHARS)}"""
     response = await llm.complete_structured(
         messages=[{"role": "user", "content": user_content}],
         system=VALIDATOR_SYSTEM,

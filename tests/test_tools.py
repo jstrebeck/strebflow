@@ -92,7 +92,7 @@ async def test_list_files(workspace_dir):
         cwd=workspace_dir, capture_output=True,
         env={**subprocess.os.environ, "GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "t@t"},
     )
-    files = await list_files(".", str(workspace_dir))
+    files = await list_files(workspace=str(workspace_dir))
     assert "existing.py" in files
     assert ".gitignore" in files
 
@@ -100,10 +100,10 @@ async def test_list_files(workspace_dir):
 @pytest.mark.asyncio
 async def test_grep(workspace_dir):
     # grep uses plain grep, no git commit needed
-    results = await grep("line2", ".", str(workspace_dir))
+    results = await grep("line2", workspace=str(workspace_dir))
     assert any("existing.py" in r and "line2" in r for r in results)
 
 @pytest.mark.asyncio
 async def test_grep_no_match(workspace_dir):
-    results = await grep("nonexistent_pattern_xyz", ".", str(workspace_dir))
+    results = await grep("nonexistent_pattern_xyz", workspace=str(workspace_dir))
     assert results == []

@@ -23,12 +23,12 @@ class PipelineState(TypedDict):
     # History
     tool_call_history: list[dict]
     # Output
-    diff_history: list[str]
+    latest_diff: str
     review_report: str
     summary: str
 
 # Fields to truncate in run_state.json (keep first 500 chars)
-_TRUNCATE_FIELDS = {"spec", "scenarios", "implementation_plan", "test_output", "steering_prompt"}
+_TRUNCATE_FIELDS = {"spec", "scenarios", "implementation_plan", "test_output", "steering_prompt", "latest_diff"}
 _TRUNCATE_LENGTH = 500
 
 def save_run_state(

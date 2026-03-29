@@ -11,8 +11,18 @@ REVIEWER_SYSTEM = """You are a senior code reviewer. The implementation has pass
 
 Produce a concise review report. This is informational — it does NOT block the pipeline."""
 
+_MAX_DIFF_CHARS = 200_000
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + "\n\n[... truncated ...]\n\n" + text[-half:]
+
+
 async def reviewer(state: dict[str, Any], llm: LLMClient, model: str) -> dict[str, Any]:
-    all_diffs = "\n---\n".join(state.get("diff_history", []))
+    latest_diff = state.get("latest_diff", "")
     user_content = f"""## Spec
 {state['spec']}
 
@@ -20,7 +30,7 @@ async def reviewer(state: dict[str, Any], llm: LLMClient, model: str) -> dict[st
 {state['scenarios']}
 
 ## Full Diff
-{all_diffs}"""
+{_truncate(latest_diff, _MAX_DIFF_CHARS)}"""
     response = await llm.complete(
         messages=[{"role": "user", "content": user_content}],
         system=REVIEWER_SYSTEM,

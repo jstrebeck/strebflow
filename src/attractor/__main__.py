@@ -11,6 +11,7 @@ from attractor.config import load_config
 from attractor.llm_client import LLMClient
 from attractor.logging import setup_logging, get_logger
 from attractor.graph import build_graph
+from attractor.tui import PipelineDisplay
 from attractor.workspace import Workspace
 
 
@@ -32,8 +33,10 @@ async def cmd_run(args: argparse.Namespace) -> None:
         target_repo=args.repo,
     )
 
+    tui = PipelineDisplay(max_cycles=config.pipeline.max_cycles)
+
     log_path = Path(workspace.path) / "run.log"
-    setup_logging(level=config.logging.level, structured=config.logging.structured, log_file=log_path)
+    setup_logging(level=config.logging.level, structured=config.logging.structured, log_file=log_path, tui=tui)
     logger = get_logger("attractor.cli")
     logger.info("workspace created", path=workspace.path)
 
@@ -54,11 +57,12 @@ async def cmd_run(args: argparse.Namespace) -> None:
             "test_command": config.pipeline.test_command or "",
             "validation_result": {},
             "tool_call_history": [],
-            "diff_history": [],
+            "latest_diff": "",
             "review_report": "",
             "summary": "",
         }
-        result = await graph.ainvoke(initial_state)
+        with tui:
+            result = await graph.ainvoke(initial_state)
         logger.info("pipeline complete", run_id=run_id, status="done")
         print(f"\nRun complete: {run_id}")
         print(f"Workspace: {workspace.path}")
