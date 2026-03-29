@@ -175,7 +175,7 @@ class PipelineDisplay:
             stage.end_time = None
             if node == "implementer":
                 stage.metadata["tool_calls"] = 0
-        if node in self._branch_failure_map:
+        if node in self._branch_failure_map and not self.converged:
             bp = self._branch_failure_map[node]
             if bp in self.stages:
                 self.stages[bp].status = StageStatus.FAILED
@@ -194,6 +194,8 @@ class PipelineDisplay:
             for name in self.topology.cycle_resettable:
                 if name in self.stages:
                     stage = self.stages[name]
+                    if stage.status == StageStatus.ACTIVE:
+                        continue
                     stage.status = StageStatus.PENDING
                     stage.start_time = None
                     stage.end_time = None

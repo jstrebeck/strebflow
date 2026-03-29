@@ -5,8 +5,12 @@ import time
 
 import pytest
 
+from rich.panel import Panel
+from rich.text import Text
+
 from attractor.tui import (
     BranchTarget,
+    PipelineDisplay,
     PipelineTopology,
     StageInfo,
     StageStatus,
@@ -63,9 +67,6 @@ class TestDefaultTopology:
         assert targets[0].back_edge_to == "implementer"
         assert targets[1].node == "done"
         assert targets[1].condition_label == "exhausted"
-
-
-from attractor.tui import PipelineDisplay
 
 
 class TestEventHandlers:
@@ -127,6 +128,20 @@ class TestEventHandlers:
     def test_unknown_node_ignored(self):
         self.display.on_node_enter("nonexistent")  # should not raise
         self.display.on_node_exit("nonexistent")
+
+    def test_on_cycle_start_does_not_reset_active_stage(self):
+        """CYCLE_START fires from inside implementer — don't reset it."""
+        self.display.on_node_enter("implementer")
+        self.display.on_cycle_start(1)
+        assert self.display.stages["implementer"].status == StageStatus.ACTIVE
+
+    def test_done_after_convergence_does_not_mark_validator_failed(self):
+        """On success path, done entry should not mark validator as FAILED."""
+        self.display.on_node_enter("scenario_validator")
+        self.display.on_node_exit("scenario_validator")
+        self.display.on_convergence()
+        self.display.on_node_enter("done")
+        assert self.display.stages["scenario_validator"].status == StageStatus.COMPLETED
 
 
 class TestMainRowRendering:
@@ -248,10 +263,6 @@ class TestMetadataRendering:
         lines = self.display._render_metadata_lines(branch_col)
         text = "\n".join(line.plain for line in lines)
         assert "3 tool calls" in text
-
-
-from rich.panel import Panel
-from rich.text import Text
 
 
 class TestFullRender:
