@@ -142,6 +142,20 @@ class PipelineDisplay:
             for target in targets:
                 self._branch_failure_map[target.node] = bp_node
 
+        # Pre-compute fixed panel height to prevent flickering.
+        # Content: 1 main row + 2 metadata + branch tree lines.
+        # Panel chrome: 2 border lines + 2 padding lines.
+        branch_lines = 0
+        for targets in self.topology.branch_points.values():
+            branch_lines += 1  # spacer above branches
+            for i, target in enumerate(targets):
+                branch_lines += 1  # branch line
+                if target.back_edge_to:
+                    branch_lines += 1  # back-edge line
+                if i < len(targets) - 1:
+                    branch_lines += 1  # spacer between branches
+        self._panel_height = 1 + 2 + branch_lines + 4  # main + meta + branches + chrome
+
     # ── Rich renderable protocol ────────────────────────────────────
 
     def __rich_console__(
@@ -155,7 +169,7 @@ class PipelineDisplay:
         self._live = Live(
             self,
             console=self.console,
-            refresh_per_second=4,
+            refresh_per_second=12,
         )
         self._live.start()
 
@@ -426,4 +440,6 @@ class PipelineDisplay:
             subtitle=f"[dim]{cycle_label}[/dim]",
             border_style=border,
             padding=(1, 2),
+            expand=True,
+            height=self._panel_height,
         )
