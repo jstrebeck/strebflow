@@ -98,7 +98,7 @@ def _make_mock_llm(content: str) -> AsyncMock:
 @pytest.mark.asyncio
 async def test_planner_extracts_plan_and_test_command():
     mock_llm = _make_mock_llm('{"implementation_plan": "Step 1: do stuff", "test_command": "pytest"}')
-    state = {"spec": "# Build a thing", "scenarios": "", "workspace_path": "", "implementation_plan": "", "cycle": 0, "max_cycles": 10, "steering_prompt": "", "test_output": "", "test_exit_code": -1, "test_command": "", "validation_result": {}, "tool_call_history": [], "diff_history": [], "review_report": "", "summary": ""}
+    state = {"spec": "# Build a thing", "scenarios": "", "workspace_path": "", "implementation_plan": "", "cycle": 0, "max_cycles": 10, "steering_prompt": "", "test_output": "", "test_exit_code": -1, "test_command": "", "validation_result": {}, "tool_call_history": [], "latest_diff": "", "review_report": "", "summary": ""}
     result = await planner(state, llm=mock_llm, model="openrouter/test-model")
     assert result["implementation_plan"] == "Step 1: do stuff"
     assert result["test_command"] == "pytest"
@@ -117,7 +117,7 @@ async def test_scenario_validator_returns_structured_result(tmp_path):
         env={**subprocess.os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
 
     mock_llm = _make_mock_llm('{"passed": true, "satisfaction_score": 0.95, "failing_scenarios": [], "diagnosis": ""}')
-    state = {"spec": "", "scenarios": "## Scenario 1", "workspace_path": str(ws), "implementation_plan": "", "cycle": 0, "max_cycles": 10, "steering_prompt": "", "test_output": "all passed", "test_exit_code": 0, "test_command": "pytest", "validation_result": {}, "tool_call_history": [], "diff_history": ["some diff"], "review_report": "", "summary": ""}
+    state = {"spec": "", "scenarios": "## Scenario 1", "workspace_path": str(ws), "implementation_plan": "", "cycle": 0, "max_cycles": 10, "steering_prompt": "", "test_output": "all passed", "test_exit_code": 0, "test_command": "pytest", "validation_result": {}, "tool_call_history": [], "latest_diff": "some diff", "review_report": "", "summary": ""}
     result = await scenario_validator(state, llm=mock_llm, model="openrouter/test-model")
     assert result["validation_result"]["passed"] is True
     assert result["validation_result"]["satisfaction_score"] == 0.95
