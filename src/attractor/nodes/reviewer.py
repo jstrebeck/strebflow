@@ -22,7 +22,7 @@ def _truncate(text: str, limit: int) -> str:
 
 
 async def reviewer(state: dict[str, Any], llm: LLMClient, model: str) -> dict[str, Any]:
-    all_diffs = "\n---\n".join(state.get("diff_history", []))
+    latest_diff = state.get("latest_diff", "")
     user_content = f"""## Spec
 {state['spec']}
 
@@ -30,7 +30,7 @@ async def reviewer(state: dict[str, Any], llm: LLMClient, model: str) -> dict[st
 {state['scenarios']}
 
 ## Full Diff
-{_truncate(all_diffs, _MAX_DIFF_CHARS)}"""
+{_truncate(latest_diff, _MAX_DIFF_CHARS)}"""
     response = await llm.complete(
         messages=[{"role": "user", "content": user_content}],
         system=REVIEWER_SYSTEM,

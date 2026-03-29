@@ -133,7 +133,7 @@ async def test_diagnoser_increments_cycle():
 @pytest.mark.asyncio
 async def test_reviewer_returns_report():
     mock_llm = _make_mock_llm("Code looks good. Minor: add docstrings.")
-    state = {"spec": "# Spec", "scenarios": "## Scenario 1", "workspace_path": "", "implementation_plan": "", "cycle": 1, "max_cycles": 10, "steering_prompt": "", "test_output": "", "test_exit_code": 0, "test_command": "pytest", "validation_result": {"passed": True}, "tool_call_history": [], "diff_history": ["diff content"], "review_report": "", "summary": ""}
+    state = {"spec": "# Spec", "scenarios": "## Scenario 1", "workspace_path": "", "implementation_plan": "", "cycle": 1, "max_cycles": 10, "steering_prompt": "", "test_output": "", "test_exit_code": 0, "test_command": "pytest", "validation_result": {"passed": True}, "tool_call_history": [], "latest_diff": "diff content", "review_report": "", "summary": ""}
     result = await reviewer(state, llm=mock_llm, model="openrouter/test-model")
     assert "docstrings" in result["review_report"]
 
