@@ -16,7 +16,7 @@ def test_save_and_load_run_state(tmp_path):
         "test_command": "",
         "validation_result": {},
         "tool_call_history": [],
-        "diff_history": [],
+        "latest_diff": "",
         "review_report": "",
         "summary": "",
     }
@@ -40,7 +40,7 @@ def test_save_run_state_excludes_large_fields(tmp_path):
         "test_command": "pytest",
         "validation_result": {"passed": False},
         "tool_call_history": [{"name": "read_file", "args_hash": "abc", "cycle": 0}],
-        "diff_history": ["diff1", "diff2"],
+        "latest_diff": "diff content",
         "review_report": "",
         "summary": "",
     }
