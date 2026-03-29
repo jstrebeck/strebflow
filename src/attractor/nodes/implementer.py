@@ -161,5 +161,5 @@ async def implementer(
 
     return {
         "tool_call_history": tool_call_history,
-        "diff_history": state.get("diff_history", []) + ([diff] if diff else []),
+        "latest_diff": diff or state.get("latest_diff", ""),
     }

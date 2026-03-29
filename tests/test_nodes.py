@@ -187,8 +187,8 @@ async def test_implementer_single_round_no_tools(tmp_path):
         "implementation_plan": "Step 1: review code", "cycle": 0, "max_cycles": 10,
         "steering_prompt": "", "test_output": "", "test_exit_code": -1,
         "test_command": "", "validation_result": {}, "tool_call_history": [],
-        "diff_history": [], "review_report": "", "summary": "",
+        "latest_diff": "", "review_report": "", "summary": "",
     }
     result = await implementer(state, llm=mock_llm, model="openrouter/test-model")
     assert isinstance(result["tool_call_history"], list)
-    assert isinstance(result["diff_history"], list)
+    assert isinstance(result["latest_diff"], str)
