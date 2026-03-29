@@ -12,6 +12,16 @@ Analyze the failure and produce a focused, actionable steering prompt that tells
 
 Do NOT produce a full implementation plan. Focus on the delta — what specifically needs to change from the current state."""
 
+_MAX_DIFF_CHARS = 200_000
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + "\n\n[... truncated ...]\n\n" + text[-half:]
+
+
 async def diagnoser(state: dict[str, Any], llm: LLMClient, model: str) -> dict[str, Any]:
     validation = state.get("validation_result", {})
     user_content = f"""## Original Spec
@@ -27,7 +37,7 @@ Diagnosis: {validation.get('diagnosis', 'No diagnosis')}
 {state['test_output']}
 
 ## Current Diff
-{state.get('diff_history', [''])[-1] if state.get('diff_history') else 'No diff available'}"""
+{_truncate(state.get('latest_diff', ''), _MAX_DIFF_CHARS) or 'No diff available'}"""
     response = await llm.complete(
         messages=[{"role": "user", "content": user_content}],
         system=DIAGNOSER_SYSTEM,

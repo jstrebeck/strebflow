@@ -125,7 +125,7 @@ async def test_scenario_validator_returns_structured_result(tmp_path):
 @pytest.mark.asyncio
 async def test_diagnoser_increments_cycle():
     mock_llm = _make_mock_llm("Fix the bug in main.py line 10")
-    state = {"spec": "# Spec", "scenarios": "", "workspace_path": "", "implementation_plan": "", "cycle": 2, "max_cycles": 10, "steering_prompt": "", "test_output": "FAILED", "test_exit_code": 1, "test_command": "pytest", "validation_result": {"passed": False, "diagnosis": "test failed"}, "tool_call_history": [], "diff_history": ["diff"], "review_report": "", "summary": ""}
+    state = {"spec": "# Spec", "scenarios": "", "workspace_path": "", "implementation_plan": "", "cycle": 2, "max_cycles": 10, "steering_prompt": "", "test_output": "FAILED", "test_exit_code": 1, "test_command": "pytest", "validation_result": {"passed": False, "diagnosis": "test failed"}, "tool_call_history": [], "latest_diff": "diff", "review_report": "", "summary": ""}
     result = await diagnoser(state, llm=mock_llm, model="openrouter/test-model")
     assert result["cycle"] == 3
     assert "Fix the bug" in result["steering_prompt"]
