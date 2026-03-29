@@ -155,7 +155,7 @@ class PipelineDisplay:
         self._live = Live(
             self,
             console=self.console,
-            refresh_per_second=12,
+            refresh_per_second=4,
         )
         self._live.start()
 
@@ -221,9 +221,10 @@ class PipelineDisplay:
     # ── Log output ───────────────────────────────────────────────────
 
     def log(self, message: str) -> None:
-        if self._live:
-            self.console.print(Text.from_ansi(message))
-        else:
+        # Suppress console output while Live is running — each console.print()
+        # forces Live to stop/restart, causing visible flicker on the panel
+        # border. Log file still captures all messages via MultiFileLogger.
+        if not self._live:
             print(message)
 
     # ── Rendering ────────────────────────────────────────────────────
