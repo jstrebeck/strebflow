@@ -7,17 +7,17 @@ llm:
     #   base_url: ${VASTAI_BASE_URL}
     #   api_key: ${VASTAI_API_KEY}
   models:
-    planner: openrouter/anthropic/claude-sonnet-4-5
-    implementer: openrouter/anthropic/claude-sonnet-4-5
-    validator: openrouter/anthropic/claude-sonnet-4-5
-    diagnoser: openrouter/openai/o3
-    reviewer: openrouter/anthropic/claude-sonnet-4-5
+    planner: openrouter/deepseek/deepseek-chat-v3-0324      # good reasoning, cheap
+    implementer: openrouter/deepseek/deepseek-chat-v3-0324   # strong at code gen
+    validator: openrouter/google/gemini-2.0-flash-001        # fast, cheap for
+    diagnoser: openrouter/deepseek/deepseek-chat-v3-0324     # needs reasoning
+    reviewer: openrouter/google/gemini-2.0-flash-001
 
 pipeline:
-  max_cycles: 10
-  loop_detection_window: 10
-  tool_output_truncation: 8000
-  context_char_limit: 400000
+  max_cycles: 5
+  loop_detection_window: 5
+  tool_output_truncation: 3000
+  context_char_limit: 40000
   context_truncation_strategy: middle
   test_command: null  # override auto-detection; null = let planner/auto-detect decide
   test_timeout: 120

@@ -6,6 +6,10 @@ from typing import Any
 import httpx
 from attractor.config import ProviderConfig
 
+class LLMRequestError(Exception):
+    """Raised when an LLM API request fails with a clear error body."""
+
+
 def parse_model_string(model: str) -> tuple[str, str]:
     """Parse 'provider/model' into (provider_name, model_id)."""
     parts = model.split("/", 1)
@@ -57,17 +61,19 @@ class LLMClient:
             raise ValueError("model is required")
         provider, model_id = parse_model_string(model)
         client = self._get_client(provider)
-        full_messages = []
-        if system:
-            full_messages.append({"role": "system", "content": system})
+        # Embed schema in system prompt for broad provider compatibility
+        # (json_schema response_format is only supported by a few models)
+        schema_instruction = (
+            f"{system}\n\n"
+            f"You MUST respond with a JSON object matching this schema:\n"
+            f"{json.dumps(response_schema, indent=2)}"
+        )
+        full_messages = [{"role": "system", "content": schema_instruction}]
         full_messages.extend(messages)
         body: dict[str, Any] = {
             "model": model_id,
             "messages": full_messages,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "response", "schema": response_schema},
-            },
+            "response_format": {"type": "json_object"},
         }
         return await self._request_with_retry(client, body)
 
@@ -78,7 +84,21 @@ class LLMClient:
                 response = await client.post("/chat/completions", json=body)
                 response.raise_for_status()
                 return response.json()
-            except (httpx.HTTPStatusError, httpx.TransportError) as e:
+            except httpx.HTTPStatusError as e:
+                # Attach response body to the error for debugging
+                error_body = e.response.text
+                last_error = LLMRequestError(
+                    f"{e.response.status_code} from {e.request.url}: {error_body}",
+                )
+                last_error.__cause__ = e
+                # Don't retry client errors (except 429 rate limit)
+                status = e.response.status_code
+                if 400 <= status < 500 and status != 429:
+                    raise last_error from e
+                if attempt < max_retries - 1:
+                    delay = 2 ** attempt
+                    await asyncio.sleep(delay)
+            except httpx.TransportError as e:
                 last_error = e
                 if attempt < max_retries - 1:
                     delay = 2 ** attempt

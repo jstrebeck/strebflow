@@ -1,7 +1,9 @@
 """Terminal UI for the attractor pipeline — animated DAG topology display."""
 from __future__ import annotations
 
+import json
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any
@@ -87,10 +89,9 @@ def default_attractor_topology() -> PipelineTopology:
 
 # ── Formatting Helpers ──────────────────────────────────────────────────
 
-_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-
 _ICON_MAP = {
     StageStatus.PENDING: ("·", "dim"),
+    StageStatus.ACTIVE: ("▸", "bold cyan"),
     StageStatus.COMPLETED: ("✓", "green"),
     StageStatus.FAILED: ("✗", "red"),
 }
@@ -101,6 +102,10 @@ _LABEL_STYLES = {
     StageStatus.COMPLETED: "green",
     StageStatus.FAILED: "red",
 }
+
+
+_ACTIVITY_LOG_LINES = 6
+_SYSTEM_LOG_LINES = 4
 
 
 def format_elapsed(seconds: float) -> str:
@@ -127,7 +132,6 @@ class PipelineDisplay:
         self.cycle = 0
         self.converged = False
         self._live: Live | None = None
-        self._frame = 0
 
         self.stages: dict[str, StageInfo] = {
             name: StageInfo(name=name, label=label)
@@ -142,6 +146,9 @@ class PipelineDisplay:
             for target in targets:
                 self._branch_failure_map[target.node] = bp_node
 
+        self._activity_log: deque[Text] = deque(maxlen=_ACTIVITY_LOG_LINES)
+        self._system_log: deque[Text] = deque(maxlen=_SYSTEM_LOG_LINES)
+
         # Pre-compute fixed panel height to prevent flickering.
         # Content: 1 main row + 2 metadata + branch tree lines.
         # Panel chrome: 2 border lines + 2 padding lines.
@@ -154,7 +161,13 @@ class PipelineDisplay:
                     branch_lines += 1  # back-edge line
                 if i < len(targets) - 1:
                     branch_lines += 1  # spacer between branches
-        self._panel_height = 1 + 2 + branch_lines + 4  # main + meta + branches + chrome
+        # system log + main + meta + branches + activity header + activity lines + chrome
+        self._panel_height = (
+            1 + _SYSTEM_LOG_LINES  # system log header + lines
+            + 1 + 2 + branch_lines  # main row + metadata + branches
+            + 1 + _ACTIVITY_LOG_LINES  # activity header + lines
+            + 4  # panel chrome (border + padding)
+        )
 
     # ── Rich renderable protocol ────────────────────────────────────
 
@@ -169,11 +182,13 @@ class PipelineDisplay:
         self._live = Live(
             self,
             console=self.console,
-            refresh_per_second=12,
+            auto_refresh=False,
         )
         self._live.start()
+        self._start_timer()
 
     def stop(self) -> None:
+        self._stop_timer()
         if self._live:
             self._live.stop()
             self._live = None
@@ -185,6 +200,28 @@ class PipelineDisplay:
     def __exit__(self, *args: Any) -> None:
         self.stop()
 
+    # ── Refresh control ─────────────────────────────────────────────
+
+    def _refresh(self) -> None:
+        if self._live:
+            self._live.refresh()
+
+    def _start_timer(self) -> None:
+        """Kick off a 1-second repeating timer to update the elapsed display."""
+        import threading
+        self._timer_stop = threading.Event()
+
+        def _tick() -> None:
+            while not self._timer_stop.wait(1.0):
+                self._refresh()
+
+        self._timer_thread = threading.Thread(target=_tick, daemon=True)
+        self._timer_thread.start()
+
+    def _stop_timer(self) -> None:
+        if hasattr(self, "_timer_stop"):
+            self._timer_stop.set()
+
     # ── Event handlers ───────────────────────────────────────────────
 
     def on_node_enter(self, node: str) -> None:
@@ -195,6 +232,11 @@ class PipelineDisplay:
             stage.end_time = None
             if node == "implementer":
                 stage.metadata["tool_calls"] = 0
+            entry = Text()
+            entry.append("  ▸ ", style="cyan")
+            entry.append(stage.label, style="bold cyan")
+            entry.append(" started", style="dim")
+            self._activity_log.append(entry)
         if node in self._branch_failure_map and not self.converged:
             bp = self._branch_failure_map[node]
             if bp in self.stages:
@@ -206,6 +248,17 @@ class PipelineDisplay:
             stage = self.stages[node]
             stage.status = StageStatus.FAILED if error else StageStatus.COMPLETED
             stage.end_time = time.monotonic()
+            entry = Text()
+            if error:
+                entry.append("  ✗ ", style="red")
+                entry.append(stage.label, style="red")
+                entry.append(" failed", style="dim red")
+            else:
+                entry.append("  ✓ ", style="green")
+                entry.append(stage.label, style="green")
+                elapsed = format_elapsed(stage.elapsed)
+                entry.append(f" done ({elapsed})", style="dim")
+            self._activity_log.append(entry)
         self._refresh()
 
     def on_cycle_start(self, cycle: int) -> None:
@@ -222,38 +275,72 @@ class PipelineDisplay:
                     stage.metadata.clear()
         self._refresh()
 
-    def on_tool_call(self) -> None:
+    def on_tool_call(self, tool: str = "", detail: str = "") -> None:
         for stage in self.stages.values():
             if stage.status == StageStatus.ACTIVE and stage.name == "implementer":
                 stage.metadata["tool_calls"] = stage.metadata.get("tool_calls", 0) + 1
+        if tool:
+            entry = Text()
+            entry.append("    ", style="dim")
+            entry.append(tool, style="dim cyan")
+            if detail:
+                entry.append(f" {detail}", style="dim")
+            self._activity_log.append(entry)
         self._refresh()
 
     def on_convergence(self) -> None:
         self.converged = True
+        entry = Text()
+        entry.append("  ✓ ", style="bold green")
+        entry.append("scenarios passed", style="green")
+        self._activity_log.append(entry)
         self._refresh()
 
     # ── Log output ───────────────────────────────────────────────────
 
     def log(self, message: str) -> None:
-        # Suppress console output while Live is running — each console.print()
-        # forces Live to stop/restart, causing visible flicker on the panel
-        # border. Log file still captures all messages via MultiFileLogger.
-        if not self._live:
-            print(message)
+        # Skip event_type messages — those are already shown in Activity
+        try:
+            data = json.loads(message)
+            if data.get("event_type"):
+                return
+        except (json.JSONDecodeError, TypeError):
+            pass
+        entry = self._format_log_entry(message)
+        self._system_log.append(entry)
+        if self._live:
+            self._refresh()
+        else:
+            print(entry.plain)
+
+    @staticmethod
+    def _format_log_entry(message: str) -> Text:
+        """Parse a structured log message into a styled Text line."""
+        entry = Text()
+        try:
+            data = json.loads(message)
+            ts = data.get("timestamp", "")
+            # Extract HH:MM:SS from ISO timestamp
+            if "T" in ts:
+                ts = ts.split("T")[1][:8]
+            event = data.get("event", message)
+            entry.append(f"  {ts}", style="dim")
+            entry.append(f"  {event}", style="dim white")
+            # Append first interesting key=value pair
+            skip = {"event", "timestamp", "level", "log_level", "logger", "logger_name", "event_type"}
+            for k, v in data.items():
+                if k not in skip and v:
+                    entry.append(f"  {k}=", style="dim")
+                    entry.append(str(v), style="dim cyan")
+                    break
+        except (json.JSONDecodeError, TypeError):
+            entry.append(f"  {message}", style="dim")
+        return entry
 
     # ── Rendering ────────────────────────────────────────────────────
 
-    def _refresh(self) -> None:
-        if self._live:
-            self._live.refresh()
-
-    def _spinner_char(self) -> str:
-        self._frame = (self._frame + 1) % len(_SPINNER_FRAMES)
-        return _SPINNER_FRAMES[self._frame]
-
-    def _stage_icon(self, stage: StageInfo) -> tuple[str, str]:
-        if stage.status == StageStatus.ACTIVE:
-            return self._spinner_char(), "bold cyan"
+    @staticmethod
+    def _stage_icon(stage: StageInfo) -> tuple[str, str]:
         return _ICON_MAP[stage.status]
 
     def _render_main_row(self) -> tuple[Text, int]:
@@ -413,9 +500,41 @@ class PipelineDisplay:
 
         return lines
 
+    def _render_system_log(self) -> list[Text]:
+        """Render the system log section above the DAG."""
+        lines: list[Text] = []
+        header = Text()
+        header.append("  ─── Log ", style="dim")
+        header.append("─" * 45, style="dim")
+        lines.append(header)
+
+        for entry in self._system_log:
+            lines.append(entry)
+        for _ in range(_SYSTEM_LOG_LINES - len(self._system_log)):
+            lines.append(Text())
+
+        return lines
+
+    def _render_activity_log(self) -> list[Text]:
+        """Render the rolling activity log section."""
+        lines: list[Text] = []
+        header = Text()
+        header.append("  ─── Activity ", style="dim")
+        header.append("─" * 40, style="dim")
+        lines.append(header)
+
+        for entry in self._activity_log:
+            lines.append(entry)
+        for _ in range(_ACTIVITY_LOG_LINES - len(self._activity_log)):
+            lines.append(Text())
+
+        return lines
+
     def _render(self) -> Panel:
         """Assemble the full DAG display panel."""
         lines: list[Text] = []
+
+        lines.extend(self._render_system_log())
 
         main_row, branch_col = self._render_main_row()
         lines.append(main_row)
@@ -424,6 +543,8 @@ class PipelineDisplay:
 
         if branch_col >= 0:
             lines.extend(self._render_branch_tree(branch_col))
+
+        lines.extend(self._render_activity_log())
 
         content = Text()
         for i, line in enumerate(lines):

@@ -96,7 +96,7 @@ def _wrap_node(node_fn, name: str, config: PipelineConfig | None = None, llm: LL
 
 
 def build_graph(config: PipelineConfig, llm: LLMClient) -> StateGraph:
-    graph = StateGraph(dict)
+    graph = StateGraph(PipelineState)
 
     graph.add_node("spec_loader", _wrap_node(spec_loader, "spec_loader", config, llm))
     graph.add_node("planner", _wrap_node(planner, "planner", config, llm))

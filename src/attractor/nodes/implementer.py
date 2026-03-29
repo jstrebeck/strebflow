@@ -124,7 +124,8 @@ async def implementer(
                 func_args = json.loads(tc["function"]["arguments"])
             except json.JSONDecodeError:
                 func_args = {}
-            logger.info("tool call", event_type="TOOL_CALL_START", tool=func_name)
+            tool_detail = func_args.get("path") or func_args.get("command", "")[:80] or func_args.get("pattern", "")
+            logger.info("tool call", event_type="TOOL_CALL_START", tool=func_name, tool_detail=tool_detail)
             full_result = await dispatch_tool(func_name, func_args, workspace_path)
             logger.info("tool done", event_type="TOOL_CALL_END", tool=func_name)
             args_hash = hash_tool_args(func_args)

@@ -5,7 +5,7 @@ from pathlib import Path
 
 MAX_LIST_FILES = 500
 
-async def list_files(path: str, workspace: str) -> list[str]:
+async def list_files(workspace: str, path: str = ".") -> list[str]:
     ws = Path(workspace).resolve()
     target = (ws / path).resolve()
     if not str(target).startswith(str(ws)):
@@ -22,7 +22,7 @@ async def list_files(path: str, workspace: str) -> list[str]:
     except Exception as e:
         return [f"Error listing files: {e}"]
 
-async def grep(pattern: str, path: str, workspace: str) -> list[str]:
+async def grep(pattern: str, workspace: str, path: str = ".") -> list[str]:
     ws = Path(workspace).resolve()
     target = (ws / path).resolve()
     if not str(target).startswith(str(ws)):

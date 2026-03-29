@@ -294,3 +294,138 @@ class TestFullRender:
         display.on_convergence()
         panel = display._render()
         assert panel.border_style == "green"
+
+
+class TestActivityLog:
+    def setup_method(self):
+        self.display = PipelineDisplay(max_cycles=3)
+
+    def test_node_enter_adds_log_entry(self):
+        self.display.on_node_enter("planner")
+        assert len(self.display._activity_log) == 1
+        assert "Plan" in self.display._activity_log[0].plain
+        assert "started" in self.display._activity_log[0].plain
+
+    def test_node_exit_adds_log_entry(self):
+        self.display.on_node_enter("planner")
+        self.display.on_node_exit("planner")
+        assert len(self.display._activity_log) == 2
+        assert "done" in self.display._activity_log[1].plain
+
+    def test_node_exit_error_shows_failed(self):
+        self.display.on_node_enter("planner")
+        self.display.on_node_exit("planner", error="boom")
+        assert "failed" in self.display._activity_log[1].plain
+
+    def test_tool_call_with_name_adds_entry(self):
+        self.display.on_node_enter("implementer")
+        self.display.on_tool_call(tool="read_file")
+        assert len(self.display._activity_log) == 2
+        assert "read_file" in self.display._activity_log[1].plain
+
+    def test_tool_call_without_name_no_entry(self):
+        self.display.on_node_enter("implementer")
+        self.display.on_tool_call()
+        assert len(self.display._activity_log) == 1  # only the node_enter
+
+    def test_convergence_adds_entry(self):
+        self.display.on_convergence()
+        assert len(self.display._activity_log) == 1
+        assert "scenarios passed" in self.display._activity_log[0].plain
+
+    def test_log_rolls_at_max_lines(self):
+        for i in range(10):
+            self.display.on_node_enter("planner")
+        from attractor.tui import _ACTIVITY_LOG_LINES
+        assert len(self.display._activity_log) == _ACTIVITY_LOG_LINES
+
+    def test_render_includes_activity_section(self):
+        self.display.on_node_enter("planner")
+        panel = self.display._render()
+        content = panel.renderable
+        assert isinstance(content, Text)
+        assert "Activity" in content.plain
+        assert "Plan" in content.plain
+
+    def test_render_activity_log_fixed_line_count(self):
+        lines = self.display._render_activity_log()
+        from attractor.tui import _ACTIVITY_LOG_LINES
+        assert len(lines) == 1 + _ACTIVITY_LOG_LINES  # header + padded lines
+
+
+class TestSystemLog:
+    def setup_method(self):
+        self.display = PipelineDisplay(max_cycles=3)
+
+    def test_log_parses_json_event(self):
+        self.display.log('{"event": "workspace created", "timestamp": "2026-03-29T14:34:37.425Z", "level": "info"}')
+        assert len(self.display._system_log) == 1
+        plain = self.display._system_log[0].plain
+        assert "14:34:37" in plain
+        assert "workspace created" in plain
+
+    def test_log_shows_extra_field(self):
+        self.display.log('{"event": "starting pipeline run", "timestamp": "2026-03-29T14:33:48.344Z", "run_id": "run_123"}')
+        plain = self.display._system_log[0].plain
+        assert "run_123" in plain
+
+    def test_log_handles_non_json(self):
+        self.display.log("plain text message")
+        assert len(self.display._system_log) == 1
+        assert "plain text message" in self.display._system_log[0].plain
+
+    def test_log_rolls_at_max(self):
+        from attractor.tui import _SYSTEM_LOG_LINES
+        for i in range(10):
+            self.display.log(f'{{"event": "msg {i}", "timestamp": "2026-01-01T00:00:00Z"}}')
+        assert len(self.display._system_log) == _SYSTEM_LOG_LINES
+
+    def test_render_includes_system_log_section(self):
+        self.display.log('{"event": "workspace created", "timestamp": "2026-03-29T14:34:37.425Z"}')
+        panel = self.display._render()
+        content = panel.renderable
+        assert isinstance(content, Text)
+        assert "Log" in content.plain
+        assert "workspace created" in content.plain
+
+    def test_render_system_log_fixed_line_count(self):
+        lines = self.display._render_system_log()
+        from attractor.tui import _SYSTEM_LOG_LINES
+        assert len(lines) == 1 + _SYSTEM_LOG_LINES  # header + padded lines
+
+    def test_format_log_entry_skips_noise_fields(self):
+        entry = PipelineDisplay._format_log_entry(
+            '{"event": "test", "timestamp": "2026-01-01T12:00:00Z", "level": "info", "logger": "", "path": "/tmp"}'
+        )
+        plain = entry.plain
+        assert "path=" in plain
+        assert "/tmp" in plain
+        # Noise fields should not appear as key=value
+        assert "level=" not in plain
+        assert "logger=" not in plain
+
+    def test_log_filters_event_type_messages(self):
+        self.display.log('{"event": "entering node", "event_type": "NODE_ENTER", "node": "planner"}')
+        assert len(self.display._system_log) == 0
+
+    def test_log_keeps_non_event_type_messages(self):
+        self.display.log('{"event": "workspace created", "timestamp": "2026-01-01T00:00:00Z"}')
+        assert len(self.display._system_log) == 1
+
+
+class TestToolCallDetail:
+    def setup_method(self):
+        self.display = PipelineDisplay(max_cycles=3)
+
+    def test_tool_call_with_detail(self):
+        self.display.on_node_enter("implementer")
+        self.display.on_tool_call(tool="read_file", detail="src/main.py")
+        plain = self.display._activity_log[-1].plain
+        assert "read_file" in plain
+        assert "src/main.py" in plain
+
+    def test_tool_call_without_detail(self):
+        self.display.on_node_enter("implementer")
+        self.display.on_tool_call(tool="list_files")
+        plain = self.display._activity_log[-1].plain
+        assert "list_files" in plain
