@@ -248,3 +248,38 @@ class TestMetadataRendering:
         lines = self.display._render_metadata_lines(branch_col)
         text = "\n".join(line.plain for line in lines)
         assert "3 tool calls" in text
+
+
+from rich.panel import Panel
+from rich.text import Text
+
+
+class TestFullRender:
+    def test_render_returns_panel(self):
+        display = PipelineDisplay(max_cycles=3)
+        result = display._render()
+        assert isinstance(result, Panel)
+
+    def test_render_contains_branch_tree(self):
+        display = PipelineDisplay(max_cycles=3)
+        panel = display._render()
+        # The panel's renderable is a Text object; check its plain content
+        content = panel.renderable
+        assert isinstance(content, Text)
+        assert "Diagnose" in content.plain
+        assert "Implement" in content.plain
+
+    def test_render_with_active_stage(self):
+        display = PipelineDisplay(max_cycles=3)
+        display.on_node_enter("implementer")
+        display.on_tool_call()
+        panel = display._render()
+        content = panel.renderable
+        assert isinstance(content, Text)
+        assert "tool calls" in content.plain
+
+    def test_render_converged_border(self):
+        display = PipelineDisplay(max_cycles=3)
+        display.on_convergence()
+        panel = display._render()
+        assert panel.border_style == "green"

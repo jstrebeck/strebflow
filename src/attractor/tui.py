@@ -382,12 +382,28 @@ class PipelineDisplay:
         return lines
 
     def _render(self) -> Panel:
-        """Assemble the full display panel (stub — branch tree added in Task 4)."""
-        main_row, _ = self._render_main_row()
+        """Assemble the full DAG display panel."""
+        lines: list[Text] = []
+
+        main_row, branch_col = self._render_main_row()
+        lines.append(main_row)
+
+        lines.extend(self._render_metadata_lines(branch_col))
+
+        if branch_col >= 0:
+            lines.extend(self._render_branch_tree(branch_col))
+
+        content = Text()
+        for i, line in enumerate(lines):
+            if i > 0:
+                content.append("\n")
+            content.append_text(line)
+
         border = "green" if self.converged else "blue"
         cycle_label = f"Cycle {self.cycle + 1} / {self.max_cycles}"
+
         return Panel(
-            main_row,
+            content,
             title="[bold]Attractor Pipeline[/bold]",
             subtitle=f"[dim]{cycle_label}[/dim]",
             border_style=border,
