@@ -218,11 +218,78 @@ class PipelineDisplay:
         else:
             print(message)
 
-    # ── Rendering (stub — filled in Task 3-5) ────────────────────────
+    # ── Rendering ────────────────────────────────────────────────────
 
     def _refresh(self) -> None:
         if self._live:
             self._live.update(self._render())
 
+    def _spinner_char(self) -> str:
+        self._frame = (self._frame + 1) % len(_SPINNER_FRAMES)
+        return _SPINNER_FRAMES[self._frame]
+
+    def _stage_icon(self, stage: StageInfo) -> tuple[str, str]:
+        if stage.status == StageStatus.ACTIVE:
+            return self._spinner_char(), "bold cyan"
+        return _ICON_MAP[stage.status]
+
+    def _render_main_row(self) -> tuple[Text, int]:
+        """Build the main horizontal flow row.
+
+        Returns (rendered_line, branch_column) where branch_column is the
+        character offset of the branch connector, or -1 if no branch point.
+        """
+        line = Text()
+        line.append("  ")
+        branch_col = -1
+
+        for i, node_name in enumerate(self.topology.main_path):
+            stage = self.stages[node_name]
+            icon, icon_style = self._stage_icon(stage)
+            label_style = _LABEL_STYLES[stage.status]
+
+            line.append(icon, style=icon_style)
+            line.append(" ")
+            line.append(stage.label, style=label_style)
+
+            if i < len(self.topology.main_path) - 1:
+                if node_name in self.topology.branch_points:
+                    line.append(" ──", style="dim")
+                    branch_col = len(line.plain)
+                    line.append("┬", style="dim")
+                    line.append("──→ ", style="dim")
+                else:
+                    line.append(" ──→ ", style="dim")
+
+        return line, branch_col
+
+    def _compute_stage_positions(self) -> dict[str, int]:
+        """Compute the starting column of each stage on the main row."""
+        positions = {}
+        col = 2  # leading "  "
+
+        for i, node_name in enumerate(self.topology.main_path):
+            stage = self.stages[node_name]
+            positions[node_name] = col
+            col += 1 + 1 + len(stage.label)  # icon + space + label
+
+            if i < len(self.topology.main_path) - 1:
+                if node_name in self.topology.branch_points:
+                    col += len(" ──┬──→ ")
+                else:
+                    col += len(" ──→ ")
+
+        return positions
+
     def _render(self) -> Panel:
-        return Panel("(rendering not yet implemented)", border_style="blue")
+        """Assemble the full display panel (stub — branch tree added in Task 4)."""
+        main_row, _ = self._render_main_row()
+        border = "green" if self.converged else "blue"
+        cycle_label = f"Cycle {self.cycle + 1} / {self.max_cycles}"
+        return Panel(
+            main_row,
+            title="[bold]Attractor Pipeline[/bold]",
+            subtitle=f"[dim]{cycle_label}[/dim]",
+            border_style=border,
+            padding=(1, 2),
+        )

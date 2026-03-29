@@ -127,3 +127,54 @@ class TestEventHandlers:
     def test_unknown_node_ignored(self):
         self.display.on_node_enter("nonexistent")  # should not raise
         self.display.on_node_exit("nonexistent")
+
+
+class TestMainRowRendering:
+    def setup_method(self):
+        self.display = PipelineDisplay(max_cycles=3)
+
+    def test_main_row_contains_all_main_path_labels(self):
+        row, _ = self.display._render_main_row()
+        plain = row.plain
+        for node_name in self.display.topology.main_path:
+            label = self.display.stages[node_name].label
+            assert label in plain, f"{label} not in main row"
+
+    def test_main_row_does_not_contain_diagnoser(self):
+        row, _ = self.display._render_main_row()
+        assert "Diagnose" not in row.plain
+
+    def test_main_row_has_branch_column(self):
+        _, branch_col = self.display._render_main_row()
+        assert branch_col > 0
+
+    def test_main_row_has_branch_connector(self):
+        row, _ = self.display._render_main_row()
+        assert "┬" in row.plain
+
+    def test_stage_positions_match_main_row(self):
+        """Column positions should correspond to actual character offsets."""
+        positions = self.display._compute_stage_positions()
+        row, _ = self.display._render_main_row()
+        plain = row.plain
+        for node_name in self.display.topology.main_path:
+            col = positions[node_name]
+            label = self.display.stages[node_name].label
+            # The label starts at col + 2 (icon + space)
+            assert plain[col + 2:col + 2 + len(label)] == label
+
+
+class TestCustomTopology:
+    def test_linear_pipeline_no_branches(self):
+        topo = PipelineTopology(
+            stages=[("a", "Alpha"), ("b", "Beta"), ("c", "Gamma")],
+            main_path=["a", "b", "c"],
+            branch_points={},
+            cycle_resettable=set(),
+        )
+        display = PipelineDisplay(max_cycles=1, topology=topo)
+        row, branch_col = display._render_main_row()
+        assert "Alpha" in row.plain
+        assert "Beta" in row.plain
+        assert "Gamma" in row.plain
+        assert branch_col == -1
