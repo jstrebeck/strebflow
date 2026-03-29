@@ -63,3 +63,67 @@ class TestDefaultTopology:
         assert targets[0].back_edge_to == "implementer"
         assert targets[1].node == "done"
         assert targets[1].condition_label == "exhausted"
+
+
+from attractor.tui import PipelineDisplay
+
+
+class TestEventHandlers:
+    def setup_method(self):
+        self.display = PipelineDisplay(max_cycles=3)
+
+    def test_on_node_enter_sets_active(self):
+        self.display.on_node_enter("planner")
+        stage = self.display.stages["planner"]
+        assert stage.status == StageStatus.ACTIVE
+        assert stage.start_time is not None
+
+    def test_on_node_enter_resets_implementer_tool_calls(self):
+        self.display.on_node_enter("implementer")
+        assert self.display.stages["implementer"].metadata["tool_calls"] == 0
+
+    def test_on_node_enter_marks_branch_point_failed(self):
+        """When diagnoser enters, scenario_validator should be retroactively marked FAILED."""
+        self.display.on_node_enter("scenario_validator")
+        self.display.on_node_exit("scenario_validator")
+        self.display.on_node_enter("diagnoser")
+        assert self.display.stages["scenario_validator"].status == StageStatus.FAILED
+
+    def test_on_node_exit_sets_completed(self):
+        self.display.on_node_enter("planner")
+        self.display.on_node_exit("planner")
+        assert self.display.stages["planner"].status == StageStatus.COMPLETED
+        assert self.display.stages["planner"].end_time is not None
+
+    def test_on_node_exit_sets_failed_on_error(self):
+        self.display.on_node_enter("planner")
+        self.display.on_node_exit("planner", error="boom")
+        assert self.display.stages["planner"].status == StageStatus.FAILED
+
+    def test_on_cycle_start_resets_cycle_nodes(self):
+        self.display.on_node_enter("implementer")
+        self.display.on_node_exit("implementer")
+        assert self.display.stages["implementer"].status == StageStatus.COMPLETED
+        self.display.on_cycle_start(1)
+        assert self.display.stages["implementer"].status == StageStatus.PENDING
+        assert self.display.stages["implementer"].start_time is None
+
+    def test_on_cycle_start_preserves_non_cycle_nodes(self):
+        self.display.on_node_enter("spec_loader")
+        self.display.on_node_exit("spec_loader")
+        self.display.on_cycle_start(1)
+        assert self.display.stages["spec_loader"].status == StageStatus.COMPLETED
+
+    def test_on_tool_call_increments(self):
+        self.display.on_node_enter("implementer")
+        self.display.on_tool_call()
+        self.display.on_tool_call()
+        assert self.display.stages["implementer"].metadata["tool_calls"] == 2
+
+    def test_on_convergence(self):
+        self.display.on_convergence()
+        assert self.display.converged is True
+
+    def test_unknown_node_ignored(self):
+        self.display.on_node_enter("nonexistent")  # should not raise
+        self.display.on_node_exit("nonexistent")
