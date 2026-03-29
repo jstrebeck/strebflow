@@ -14,7 +14,7 @@ async def test_spec_loader(tmp_path):
         "workspace_path": "", "implementation_plan": "", "cycle": 0,
         "max_cycles": 10, "steering_prompt": "", "test_output": "",
         "test_exit_code": -1, "test_command": "", "validation_result": {},
-        "tool_call_history": [], "diff_history": [], "review_report": "",
+        "tool_call_history": [], "latest_diff": "", "review_report": "",
         "summary": "",
     }
     result = await spec_loader(state)

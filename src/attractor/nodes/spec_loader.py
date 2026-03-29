@@ -15,7 +15,7 @@ async def spec_loader(state: dict[str, Any]) -> dict[str, Any]:
         "scenarios": scenarios_path.read_text(),
         "cycle": 0,
         "tool_call_history": [],
-        "diff_history": [],
+        "latest_diff": "",
         "validation_result": {},
         "review_report": "",
         "summary": "",
