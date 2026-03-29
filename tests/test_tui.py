@@ -241,10 +241,10 @@ class TestMetadataRendering:
     def setup_method(self):
         self.display = PipelineDisplay(max_cycles=3)
 
-    def test_metadata_empty_when_no_active(self):
+    def test_metadata_spacers_when_no_active(self):
         _, branch_col = self.display._render_main_row()
         lines = self.display._render_metadata_lines(branch_col)
-        assert len(lines) == 0
+        assert len(lines) == 2  # always 2 lines for stable height
 
     def test_metadata_shows_elapsed_for_active(self):
         self.display.on_node_enter("planner")

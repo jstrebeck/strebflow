@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any
 
-from rich.console import Console
+from rich.console import Console, ConsoleOptions, RenderResult
 from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
@@ -142,11 +142,18 @@ class PipelineDisplay:
             for target in targets:
                 self._branch_failure_map[target.node] = bp_node
 
+    # ── Rich renderable protocol ────────────────────────────────────
+
+    def __rich_console__(
+        self, console: Console, options: ConsoleOptions,
+    ) -> RenderResult:
+        yield self._render()
+
     # ── Context manager ──────────────────────────────────────────────
 
     def start(self) -> None:
         self._live = Live(
-            self._render(),
+            self,
             console=self.console,
             refresh_per_second=12,
         )
@@ -154,7 +161,6 @@ class PipelineDisplay:
 
     def stop(self) -> None:
         if self._live:
-            self._live.update(self._render())
             self._live.stop()
             self._live = None
 
@@ -224,7 +230,7 @@ class PipelineDisplay:
 
     def _refresh(self) -> None:
         if self._live:
-            self._live.update(self._render())
+            self._live.refresh()
 
     def _spinner_char(self) -> str:
         self._frame = (self._frame + 1) % len(_SPINNER_FRAMES)
@@ -294,9 +300,19 @@ class PipelineDisplay:
             return "green"
         return "dim"
 
+    def _make_metadata_spacer(self, branch_col: int) -> Text:
+        """Empty line that preserves the branch │ connector."""
+        spacer = Text()
+        if branch_col > 0:
+            spacer.append(" " * branch_col)
+            spacer.append("│", style="dim")
+        return spacer
+
     def _render_metadata_lines(self, branch_col: int) -> list[Text]:
-        """Render elapsed time and tool calls below the active main-path stage."""
-        lines: list[Text] = []
+        """Render elapsed time and tool calls below the active main-path stage.
+
+        Always returns exactly 2 lines to keep panel height stable.
+        """
         positions = self._compute_stage_positions()
 
         active: StageInfo | None = None
@@ -307,7 +323,7 @@ class PipelineDisplay:
                 break
 
         if active is None:
-            return lines
+            return [self._make_metadata_spacer(branch_col)] * 2
 
         col = positions.get(active.name, 0)
         elapsed_str = format_elapsed(active.elapsed)
@@ -318,7 +334,6 @@ class PipelineDisplay:
         if branch_col > 0 and len(line.plain) < branch_col:
             line.append(" " * (branch_col - len(line.plain)))
             line.append("│", style="dim")
-        lines.append(line)
 
         tool_calls = active.metadata.get("tool_calls", 0)
         if active.name == "implementer" and tool_calls > 0:
@@ -328,9 +343,9 @@ class PipelineDisplay:
             if branch_col > 0 and len(tc_line.plain) < branch_col:
                 tc_line.append(" " * (branch_col - len(tc_line.plain)))
                 tc_line.append("│", style="dim")
-            lines.append(tc_line)
+            return [line, tc_line]
 
-        return lines
+        return [line, self._make_metadata_spacer(branch_col)]
 
     def _render_branch_tree(self, branch_col: int) -> list[Text]:
         """Render the branch tree below the branch point."""
