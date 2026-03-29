@@ -281,6 +281,106 @@ class PipelineDisplay:
 
         return positions
 
+    def _branch_connector_style(self, target_stage: StageInfo) -> str:
+        """Style for branch connector lines — amber for diagnose path."""
+        if target_stage.name == "diagnoser":
+            if target_stage.status in (StageStatus.ACTIVE, StageStatus.COMPLETED):
+                return "yellow"
+        if target_stage.status == StageStatus.ACTIVE:
+            return "cyan"
+        if target_stage.status == StageStatus.COMPLETED:
+            return "green"
+        return "dim"
+
+    def _render_metadata_lines(self, branch_col: int) -> list[Text]:
+        """Render elapsed time and tool calls below the active main-path stage."""
+        lines: list[Text] = []
+        positions = self._compute_stage_positions()
+
+        active: StageInfo | None = None
+        for node_name in self.topology.main_path:
+            stage = self.stages[node_name]
+            if stage.status == StageStatus.ACTIVE:
+                active = stage
+                break
+
+        if active is None:
+            return lines
+
+        col = positions.get(active.name, 0)
+        elapsed_str = format_elapsed(active.elapsed)
+
+        line = Text()
+        line.append(" " * col)
+        line.append(f"   {elapsed_str}", style="cyan")
+        if branch_col > 0 and len(line.plain) < branch_col:
+            line.append(" " * (branch_col - len(line.plain)))
+            line.append("│", style="dim")
+        lines.append(line)
+
+        tool_calls = active.metadata.get("tool_calls", 0)
+        if active.name == "implementer" and tool_calls > 0:
+            tc_line = Text()
+            tc_line.append(" " * col)
+            tc_line.append(f"   {tool_calls} tool calls", style="dim cyan")
+            if branch_col > 0 and len(tc_line.plain) < branch_col:
+                tc_line.append(" " * (branch_col - len(tc_line.plain)))
+                tc_line.append("│", style="dim")
+            lines.append(tc_line)
+
+        return lines
+
+    def _render_branch_tree(self, branch_col: int) -> list[Text]:
+        """Render the branch tree below the branch point."""
+        if branch_col < 0:
+            return []
+
+        lines: list[Text] = []
+
+        for _bp_node, targets in self.topology.branch_points.items():
+            spacer = Text()
+            spacer.append(" " * branch_col)
+            spacer.append("│", style="dim")
+            lines.append(spacer)
+
+            for i, target in enumerate(targets):
+                is_last = i == len(targets) - 1
+                connector = "╰" if is_last else "├"
+
+                stage = self.stages[target.node]
+                icon, icon_style = self._stage_icon(stage)
+                label_style = _LABEL_STYLES[stage.status]
+                conn_style = self._branch_connector_style(stage)
+
+                display_label = stage.label
+                if target.condition_label:
+                    display_label = f"{stage.label} ({target.condition_label})"
+
+                line = Text()
+                line.append(" " * branch_col)
+                line.append(f"{connector}──→ ", style=conn_style)
+                line.append(icon, style=icon_style)
+                line.append(" ")
+                line.append(display_label, style=label_style)
+                lines.append(line)
+
+                if target.back_edge_to:
+                    back_label = self.topology.label_map[target.back_edge_to]
+                    back_line = Text()
+                    back_line.append(" " * branch_col)
+                    back_line.append("│" if not is_last else " ", style="dim")
+                    back_line.append("       ╰──→ ", style=conn_style)
+                    back_line.append(back_label, style=conn_style)
+                    lines.append(back_line)
+
+                if not is_last:
+                    s = Text()
+                    s.append(" " * branch_col)
+                    s.append("│", style="dim")
+                    lines.append(s)
+
+        return lines
+
     def _render(self) -> Panel:
         """Assemble the full display panel (stub — branch tree added in Task 4)."""
         main_row, _ = self._render_main_row()

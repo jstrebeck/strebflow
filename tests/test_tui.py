@@ -178,3 +178,73 @@ class TestCustomTopology:
         assert "Beta" in row.plain
         assert "Gamma" in row.plain
         assert branch_col == -1
+
+
+class TestBranchTreeRendering:
+    def setup_method(self):
+        self.display = PipelineDisplay(max_cycles=3)
+
+    def test_branch_tree_contains_diagnose(self):
+        _, branch_col = self.display._render_main_row()
+        lines = self.display._render_branch_tree(branch_col)
+        text = "\n".join(line.plain for line in lines)
+        assert "Diagnose" in text
+
+    def test_branch_tree_contains_back_edge(self):
+        _, branch_col = self.display._render_main_row()
+        lines = self.display._render_branch_tree(branch_col)
+        text = "\n".join(line.plain for line in lines)
+        assert "Implement" in text
+
+    def test_branch_tree_shows_exhausted(self):
+        _, branch_col = self.display._render_main_row()
+        lines = self.display._render_branch_tree(branch_col)
+        text = "\n".join(line.plain for line in lines)
+        assert "exhausted" in text
+
+    def test_branch_tree_has_connectors(self):
+        _, branch_col = self.display._render_main_row()
+        lines = self.display._render_branch_tree(branch_col)
+        text = "\n".join(line.plain for line in lines)
+        assert "├" in text
+        assert "╰" in text
+        assert "│" in text
+
+    def test_no_branch_tree_for_linear_topology(self):
+        topo = PipelineTopology(
+            stages=[("a", "Alpha"), ("b", "Beta")],
+            main_path=["a", "b"],
+            branch_points={},
+            cycle_resettable=set(),
+        )
+        display = PipelineDisplay(max_cycles=1, topology=topo)
+        lines = display._render_branch_tree(-1)
+        assert lines == []
+
+
+class TestMetadataRendering:
+    def setup_method(self):
+        self.display = PipelineDisplay(max_cycles=3)
+
+    def test_metadata_empty_when_no_active(self):
+        _, branch_col = self.display._render_main_row()
+        lines = self.display._render_metadata_lines(branch_col)
+        assert len(lines) == 0
+
+    def test_metadata_shows_elapsed_for_active(self):
+        self.display.on_node_enter("planner")
+        _, branch_col = self.display._render_main_row()
+        lines = self.display._render_metadata_lines(branch_col)
+        assert len(lines) >= 1
+        text = lines[0].plain
+        assert "s" in text  # elapsed time contains "s"
+
+    def test_metadata_shows_tool_calls_for_implementer(self):
+        self.display.on_node_enter("implementer")
+        self.display.on_tool_call()
+        self.display.on_tool_call()
+        self.display.on_tool_call()
+        _, branch_col = self.display._render_main_row()
+        lines = self.display._render_metadata_lines(branch_col)
+        text = "\n".join(line.plain for line in lines)
+        assert "3 tool calls" in text
